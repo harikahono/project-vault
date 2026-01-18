@@ -1,13 +1,6 @@
-Beres, Bos! Ini versi Markdown (`.md`) murni buat lu. Gue udah bikinin **ASCII Art** yang gahar di paling atas biar pas orang buka repo lu di GitHub, langsung berasa aura terminal *hacker*.
-
-Silakan lu salin semua teks di bawah ini ke file `README.md` lu:
-
----
-
-```markdown
 # 🟢 VAULT // BY HARIKAHONO
 
-```text
+```
 ██    ██  █████  ██    ██ ██      ████████ 
 ██    ██ ██   ██ ██    ██ ██         ██    
 ██    ██ ███████ ██    ██ ██         ██    
