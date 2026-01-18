@@ -1,0 +1,66 @@
+@import "tailwindcss";
+
+@theme {
+  /* Arasaka Cyberpunk Palette */
+  --color-matrix-green: #00FF9C;
+  --color-matrix-bg: #050505;
+  --color-matrix-card: #0A0A0A;
+  --color-matrix-border: #1A1A1A;
+  --color-alert-pink: #FF2E63;
+  
+  /* Effects */
+  --shadow-glow-green: 0 0 15px rgba(0, 255, 156, 0.25);
+  --font-mono: "JetBrains Mono", "Fira Code", monospace;
+}
+
+@layer base {
+  body {
+    @apply bg-matrix-bg text-white font-mono overflow-hidden;
+  }
+
+  /* CUSTOM SCROLLBAR / SLIDER STYLE */
+  ::-webkit-scrollbar {
+    width: 4px; /* Sangat tipis biar gak makan tempat */
+    height: 4px;
+  }
+
+  /* Jalur slider (Track) */
+  ::-webkit-scrollbar-track {
+    background: var(--color-matrix-bg);
+    border-left: 1px solid var(--color-matrix-border);
+  }
+
+  /* Pegangan slider (Thumb) */
+  ::-webkit-scrollbar-thumb {
+    background: var(--color-matrix-border);
+    border-radius: 0px; /* HUD militer pake gaya kotak/tajam */
+    transition: all 0.3s ease;
+  }
+
+  /* Hover effect: Slider menyala hijau Matrix saat disentuh */
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--color-matrix-green);
+    box-shadow: 0 0 10px var(--color-matrix-green);
+  }
+
+  /* Khusus untuk Firefox */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-matrix-border) var(--color-matrix-bg);
+  }
+}
+
+/* Custom Scanline Effect ala HUD */
+.scanline {
+  background: linear-gradient(to bottom, transparent 50%, rgba(0, 255, 156, 0.02) 50%);
+  background-size: 100% 4px;
+}
+
+/* Utility tambahan buat sembunyiin scrollbar tapi tetep bisa di-scroll */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
