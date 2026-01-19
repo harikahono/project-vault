@@ -50,7 +50,7 @@ export default function VaultPage() {
     }
   }, [downloadStatus]);
 
-  // --- DERIVED DATA & SMART FILTERING ---
+  // --- DERIVED DATA & SMART FILTERING (ANTI-WARISAN) ---
   const detailMember = useMemo(() => 
     activeProject?.members?.find(m => m.id === selectedMemberId),
     [activeProject, selectedMemberId]
@@ -61,23 +61,20 @@ export default function VaultPage() {
     [activeProject, selectedLogId]
   );
 
-  // FIXED: Filter log berdasarkan umur unit (Anti-Warisan Utang)
+  // PROTOKOL ANTI-WARISAN: Filter log berdasarkan umur unit
   const memberLogs = useMemo(() => {
     if (!detailMember || !activeProject) return [];
     return activeProject.logs.filter(l => {
-      // 1. Tampilkan jika log ini ditujukan langsung (Direct) ke unit tersebut
+      // 1. Tampilkan jika log DIRECT milik unit tersebut
       if (l.memberId === selectedMemberId) return true;
 
-      // 2. Tampilkan Shared Expense HANYA jika terjadi SETELAH unit bergabung
+      // 2. Tampilkan SHARED HANYA jika terjadi SETELAH unit bergabung
       if (!l.memberId && l.type === 'EXPENSE') {
         const logTime = new Date(l.timestamp).getTime();
         const joinTime = new Date(detailMember.createdAt).getTime();
-        
-        // Safety check untuk validitas tanggal
         if (isNaN(logTime) || isNaN(joinTime)) return true;
         return logTime >= joinTime;
       }
-
       return false;
     });
   }, [activeProject, detailMember, selectedMemberId]);
@@ -124,7 +121,6 @@ export default function VaultPage() {
     doc.setFont("courier", "bold");
     doc.text(`UNIT AUDIT: ${member.name.toUpperCase()}`, 14, 20);
     
-    // Gunakan list yang sudah terfilter untuk PDF unit
     const filteredLogs = activeProject.logs.filter(l => {
         if (l.memberId === member.id) return true;
         if (!l.memberId && l.type === 'EXPENSE') {
@@ -149,9 +145,10 @@ export default function VaultPage() {
   // --- ASYNC EXECUTION ---
   const handleExecute = async () => {
     if (!activeProject && modalType !== "PROJECT") return;
-
+    
     // FIX: Bersihkan titik ribuan dan handle NaN agar SQLite tidak crash
-    const amountNum = parseInt(formData.amount.replace(/\./g, '')) || 0;
+    const cleanAmount = formData.amount.replace(/\./g, '');
+    const amountNum = parseInt(cleanAmount) || 0;
 
     try {
       if (modalType === "PROJECT" && formData.name) {
@@ -180,7 +177,6 @@ export default function VaultPage() {
     <div className="flex h-screen w-screen bg-matrix-bg font-mono text-white overflow-hidden select-none relative">
       <div className="absolute inset-0 pointer-events-none scanline opacity-30 z-[100]" />
 
-      {/* --- NOTIFICATION TOAST --- */}
       <AnimatePresence>
         {downloadStatus && (
           <motion.div 
@@ -196,7 +192,6 @@ export default function VaultPage() {
         )}
       </AnimatePresence>
 
-      {/* 1. SIDEBAR NAVIGATION */}
       <aside className="w-20 border-r border-matrix-border bg-matrix-card flex flex-col items-center py-8 gap-6 z-50 flex-shrink-0">
         <motion.button 
           title="Return to System Hub" variants={glitch} whileHover="hover"
@@ -221,7 +216,6 @@ export default function VaultPage() {
         </div>
       </aside>
 
-      {/* 2. MAIN HUD VIEWPORT */}
       <main className="flex-1 flex flex-col p-6 gap-6 min-w-0 overflow-hidden">
         <AnimatePresence mode="wait">
           {isLoading ? (
@@ -264,7 +258,7 @@ export default function VaultPage() {
                     {activeProject.members?.slice(0, 6).map((m) => {
                       const impact = (activeProject.balance + (m.totalSpent ?? 0)) > 0 ? ((m.totalSpent ?? 0) / (activeProject.balance + (m.totalSpent ?? 0))) * 100 : 0;
                       return (
-                        <motion.div whileHover={{ scale: 1.02 }} onClick={() => setSelectedMemberId(m.id)} key={m.id} className="border border-matrix-border bg-matrix-bg p-4 h-32 flex flex-col justify-between hover:border-matrix-green transition-all group cursor-pointer shadow-lg">
+                        <motion.div whileHover={{ scale: 1.02 }} onClick={() => setSelectedMemberId(m.id)} key={m.id} className="border border-matrix-border bg-matrix-card p-4 h-32 flex flex-col justify-between hover:border-matrix-green transition-all group cursor-pointer shadow-lg">
                           <div className="flex justify-between items-start"><div className="flex gap-3 min-w-0"><div className="w-10 h-10 bg-zinc-900 border border-matrix-border flex items-center justify-center text-[9px] text-matrix-green/10 font-black">HUD</div><div className="min-w-0"><h3 className="text-[10px] font-black uppercase truncate text-white">{m.name}</h3><p className="text-[8px] text-matrix-green/50 font-black italic truncate uppercase">{m.role}</p></div></div></div>
                           <div className="space-y-1.5"><div className="flex justify-between text-[7px] font-black uppercase tracking-tighter"><span className="text-zinc-600">Spent:</span><span className="text-alert-pink font-bold">{(m.totalSpent ?? 0).toLocaleString()} DP</span></div><div className="h-1 bg-matrix-border w-full overflow-hidden"><motion.div initial={{ width: 0 }} animate={{ width: `${impact}%` }} className="h-full bg-alert-pink shadow-[0_0_10px_#FF2E63]" /></div></div>
                         </motion.div>
