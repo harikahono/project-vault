@@ -1,6 +1,6 @@
 # 🟢 VAULT // BY HARIKAHONO
 
-
+---
 ██    ██  █████  ██    ██ ██      ████████ 
 ██    ██ ██   ██ ██    ██ ██         ██    
 ██    ██ ███████ ██    ██ ██         ██    
@@ -10,7 +10,7 @@
  >> TACTICAL_LEDGER_INTERFACE_V1.0
  >> ARCHITECT: HARIKAHONO
  >> STATUS: ENCRYPTED // LINK_STABLE
-
+---
 
 
 **Vault** adalah sistem manajemen sumber daya taktis (tactical ledger) berperforma tinggi yang dirancang untuk Netrunners dan Tim Operatif. Dibangun dengan estetika **Arasaka HUD**, aplikasi ini memungkinkan monitoring alokasi dana, pelacakan *burn rate* unit, dan audit transaksi dengan presisi nol-latensi.
