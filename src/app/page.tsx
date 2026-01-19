@@ -50,7 +50,7 @@ export default function VaultPage() {
     }
   }, [downloadStatus]);
 
-  // --- DERIVED DATA & SMART FILTERING (ANTI-WARISAN) ---
+  // --- DERIVED DATA & SMART FILTERING ---
   const detailMember = useMemo(() => 
     activeProject?.members?.find(m => m.id === selectedMemberId),
     [activeProject, selectedMemberId]
@@ -61,19 +61,21 @@ export default function VaultPage() {
     [activeProject, selectedLogId]
   );
 
-  // PROTOKOL ANTI-WARISAN: Filter log berdasarkan umur unit
+  // --- FIX: PROTOKOL AUDIT CERDAS ---
   const memberLogs = useMemo(() => {
     if (!detailMember || !activeProject) return [];
     return activeProject.logs.filter(l => {
-      // 1. Tampilkan jika log DIRECT milik unit tersebut
+      // 1. DIRECT LOG: Jika log ini ditembak ke member ini, WAJIB tampil.
       if (l.memberId === selectedMemberId) return true;
 
-      // 2. Tampilkan SHARED HANYA jika terjadi SETELAH unit bergabung
+      // 2. SHARED LOG: Jika log patungan, tampilkan jika terjadi setelah join (dengan buffer 2s)
       if (!l.memberId && l.type === 'EXPENSE') {
         const logTime = new Date(l.timestamp).getTime();
         const joinTime = new Date(detailMember.createdAt).getTime();
         if (isNaN(logTime) || isNaN(joinTime)) return true;
-        return logTime >= joinTime;
+        
+        // Buffer 2000ms untuk mengatasi race condition saat penulisan database
+        return logTime >= (joinTime - 2000);
       }
       return false;
     });
@@ -121,10 +123,11 @@ export default function VaultPage() {
     doc.setFont("courier", "bold");
     doc.text(`UNIT AUDIT: ${member.name.toUpperCase()}`, 14, 20);
     
+    // Samakan logika filter PDF dengan filter UI (Zero-Latency Protection)
     const filteredLogs = activeProject.logs.filter(l => {
         if (l.memberId === member.id) return true;
         if (!l.memberId && l.type === 'EXPENSE') {
-            return new Date(l.timestamp).getTime() >= new Date(member.createdAt).getTime();
+            return new Date(l.timestamp).getTime() >= (new Date(member.createdAt).getTime() - 2000);
         }
         return false;
     });
@@ -146,8 +149,8 @@ export default function VaultPage() {
   const handleExecute = async () => {
     if (!activeProject && modalType !== "PROJECT") return;
     
-    // FIX: Bersihkan titik ribuan dan handle NaN agar SQLite tidak crash
-    const cleanAmount = formData.amount.replace(/\./g, '');
+    // Konversi angka yang sudah dibersihkan dari titik di useVault atau UI
+    const cleanAmount = formData.amount.toString().replace(/\./g, '');
     const amountNum = parseInt(cleanAmount) || 0;
 
     try {
