@@ -29,25 +29,33 @@ export const useVault = create<VaultState>((set, get) => ({
     try {
       set({ isLoading: true });
       const db = await getDb();
-      const rawP: any[] = await db.select("SELECT * FROM projects");
-      const rawM: any[] = await db.select("SELECT * FROM members");
-      const rawL: any[] = await db.select("SELECT * FROM logs ORDER BY timestamp DESC");
+      
+      // Parallel fetch untuk kecepatan akses data
+      const [rawP, rawM, rawL]: [any[], any[], any[]] = await Promise.all([
+        db.select("SELECT * FROM projects"),
+        db.select("SELECT * FROM members"),
+        db.select("SELECT * FROM logs ORDER BY timestamp DESC")
+      ])as [any[], any[], any[],];
 
       const formatted = rawP.map(p => ({
         id: p.id, name: p.name, balance: p.balance,
         members: rawM.filter(m => m.project_id === p.id).map(m => ({ 
           id: m.id, name: m.name, role: m.role, 
-          totalSpent: m.total_spent, // MAPPING FIX
+          totalSpent: m.total_spent,
           createdAt: m.created_at 
         })),
         logs: rawL.filter(l => l.project_id === p.id).map(l => ({ 
           id: l.id, timestamp: l.timestamp, type: l.type, context: l.context, value: l.value, memberId: l.member_id 
         }))
       }));
+
       set({ projects: formatted, isLoading: false });
       const saved = localStorage.getItem('vault_active_id');
       if (saved && formatted.some(p => p.id === saved)) set({ activeProjectId: saved });
-    } catch (err) { set({ isLoading: false }); }
+    } catch (err) { 
+      console.error("FETCH_FAILED", err);
+      set({ isLoading: false }); 
+    }
   },
 
   setActiveProject: (id) => {
@@ -70,57 +78,98 @@ export const useVault = create<VaultState>((set, get) => ({
     await get().fetchProjects();
   },
 
-  deleteMember: async (projectId, memberId, refund) => {
-    if (get().isProcessing) return;
-    set({ isProcessing: true });
-    const db = await getDb();
-    const p = get().projects.find(x => x.id === projectId);
-    const m = p?.members.find(x => x.id === memberId);
-    if (!m) { set({ isProcessing: false }); return; }
-
-    try {
-      await db.execute("BEGIN IMMEDIATE TRANSACTION");
-      const refundAmt = refund ? m.totalSpent : 0;
-      await db.execute("UPDATE projects SET balance = balance + $1 WHERE id = $2", [refundAmt, projectId]);
-      await db.execute("DELETE FROM members WHERE id = $1", [memberId]);
-      await db.execute("INSERT INTO logs (id, project_id, timestamp, type, context, value) VALUES ($1, $2, $3, $4, $5, $6)", 
-        [crypto.randomUUID(), projectId, new Date().toISOString(), refund ? 'INJECTION' : 'EXPENSE', `UNIT_DECOMMISSIONED: ${m.name}`, refundAmt]);
-      await db.execute("COMMIT");
-    } catch (e) { await db.execute("ROLLBACK").catch(() => {}); }
-    finally { set({ isProcessing: false }); await get().fetchProjects(); }
-  },
-
+  // PROTOKOL ANTI-GHOST: Transaksi utuh satu paket
   addExpense: async (projectId, amount, context, memberId) => {
     if (get().isProcessing) return;
     set({ isProcessing: true });
-    const db = await getDb();
-    const project = get().projects.find(p => p.id === projectId);
-    if (!project) { set({ isProcessing: false }); return; }
-
+    
     try {
-      await db.execute("BEGIN IMMEDIATE TRANSACTION");
+      const db = await getDb();
+      
+      // Ambil data real-time dari DB sebelum kalkulasi
+      const currentMembers: any[] = await db.select("SELECT id FROM members WHERE project_id = $1", [projectId]);
+      const memberCount = currentMembers.length;
       const isExp = amount > 0;
+      const now = new Date().toISOString();
+      const logId = crypto.randomUUID();
+
+      // Mulai transaksi eksplisit
+      await db.execute("BEGIN TRANSACTION");
+
+      // 1. Update Balance Projek
       await db.execute("UPDATE projects SET balance = balance - $1 WHERE id = $2", [amount, projectId]);
 
+      // 2. Logic Pembagian Beban
       if (isExp) {
         if (memberId) {
+          // Direct Expense ke unit tertentu
           await db.execute("UPDATE members SET total_spent = total_spent + $1 WHERE id = $2", [amount, memberId]);
-        } else if (project.members.length > 0) {
-          const split = amount / project.members.length;
+        } else if (memberCount > 0) {
+          // Shared Expense ke semua unit (Anti-Infinity Guard)
+          const split = amount / memberCount;
           await db.execute("UPDATE members SET total_spent = total_spent + $1 WHERE project_id = $2", [split, projectId]);
         }
       }
 
-      await db.execute("INSERT INTO logs (id, project_id, member_id, timestamp, type, context, value) VALUES ($1, $2, $3, $4, $5, $6, $7)", 
-        [crypto.randomUUID(), projectId, memberId || null, new Date().toISOString(), isExp ? 'EXPENSE' : 'INJECTION', !memberId && isExp ? `${context} (SHARED_SPLIT)` : context, -amount]);
+      // 3. Pencatatan Log Mutlak
+      const logCtx = !memberId && isExp ? `${context} (SHARED_SPLIT)` : context;
+      await db.execute(
+        "INSERT INTO logs (id, project_id, member_id, timestamp, type, context, value) VALUES ($1, $2, $3, $4, $5, $6, $7)", 
+        [logId, projectId, memberId || null, now, isExp ? 'EXPENSE' : 'INJECTION', logCtx, -amount]
+      );
+
       await db.execute("COMMIT");
-    } catch (e) { await db.execute("ROLLBACK").catch(() => {}); }
-    finally { set({ isProcessing: false }); await get().fetchProjects(); }
+      console.log("✓ Transaction_Secured");
+    } catch (e) { 
+      const db = await getDb();
+      await db.execute("ROLLBACK").catch(() => {});
+      console.error("CRITICAL_TRANSACTION_FAILURE:", e);
+    } finally { 
+      set({ isProcessing: false }); 
+      await get().fetchProjects(); 
+    }
+  },
+
+  deleteMember: async (projectId, memberId, refund) => {
+    if (get().isProcessing) return;
+    set({ isProcessing: true });
+    
+    try {
+      const db = await getDb();
+      const members: any[] = await db.select("SELECT total_spent, name FROM members WHERE id = $1", [memberId]);
+      if (members.length === 0) throw new Error("UNIT_NOT_FOUND");
+
+      const m = members[0];
+      const refundAmt = refund ? m.total_spent : 0;
+      const now = new Date().toISOString();
+
+      await db.execute("BEGIN TRANSACTION");
+      
+      // Balikkan dana ke brankas jika refund dipilih
+      await db.execute("UPDATE projects SET balance = balance + $1 WHERE id = $2", [refundAmt, projectId]);
+      await db.execute("DELETE FROM members WHERE id = $1", [memberId]);
+      
+      // Catat dekomisi unit sebagai suntikan dana balik
+      await db.execute(
+        "INSERT INTO logs (id, project_id, timestamp, type, context, value) VALUES ($1, $2, $3, $4, $5, $6)", 
+        [crypto.randomUUID(), projectId, now, 'INJECTION', `UNIT_DECOMMISSIONED: ${m.name}`, refundAmt]
+      );
+
+      await db.execute("COMMIT");
+    } catch (e) { 
+      const db = await getDb();
+      await db.execute("ROLLBACK").catch(() => {});
+      console.error("DECOMMISSION_FAILED", e);
+    } finally { 
+      set({ isProcessing: false }); 
+      await get().fetchProjects(); 
+    }
   },
 
   deleteProject: async (id) => {
     const db = await getDb();
     await db.execute("DELETE FROM projects WHERE id = $1", [id]);
     await get().fetchProjects();
+    set({ activeProjectId: null });
   }
 }));
