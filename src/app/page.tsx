@@ -6,7 +6,7 @@ import {
 } from 'lucide-react';
 import { useVault } from "@/store/useVault";
 import { cn } from "@/lib/utils";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 
@@ -51,23 +51,36 @@ export default function VaultPage() {
   }, [downloadStatus]);
 
   // --- DERIVED DATA & SMART FILTERING ---
-  const detailMember = activeProject?.members?.find(m => m.id === selectedMemberId);
-  const detailLog = activeProject?.logs?.find(l => l.id === selectedLogId);
+  const detailMember = useMemo(() => 
+    activeProject?.members?.find(m => m.id === selectedMemberId),
+    [activeProject, selectedMemberId]
+  );
 
-  // PROTOKOL ANTI-WARISAN: Filter log berdasarkan umur unit
-  const memberLogs = activeProject?.logs?.filter(l => {
-    // 1. Tampilkan jika log ini ditujukan langsung (Direct) ke unit tersebut
-    if (l.memberId === selectedMemberId) return true;
+  const detailLog = useMemo(() => 
+    activeProject?.logs?.find(l => l.id === selectedLogId),
+    [activeProject, selectedLogId]
+  );
 
-    // 2. Tampilkan Shared Expense HANYA jika terjadi SETELAH unit bergabung
-    if (!l.memberId && l.type === 'EXPENSE' && detailMember) {
-      const logTime = new Date(l.timestamp).getTime();
-      const joinTime = new Date(detailMember.createdAt).getTime();
-      return logTime >= joinTime;
-    }
+  // FIXED: Filter log berdasarkan umur unit (Anti-Warisan Utang)
+  const memberLogs = useMemo(() => {
+    if (!detailMember || !activeProject) return [];
+    return activeProject.logs.filter(l => {
+      // 1. Tampilkan jika log ini ditujukan langsung (Direct) ke unit tersebut
+      if (l.memberId === selectedMemberId) return true;
 
-    return false;
-  });
+      // 2. Tampilkan Shared Expense HANYA jika terjadi SETELAH unit bergabung
+      if (!l.memberId && l.type === 'EXPENSE') {
+        const logTime = new Date(l.timestamp).getTime();
+        const joinTime = new Date(detailMember.createdAt).getTime();
+        
+        // Safety check untuk validitas tanggal
+        if (isNaN(logTime) || isNaN(joinTime)) return true;
+        return logTime >= joinTime;
+      }
+
+      return false;
+    });
+  }, [activeProject, detailMember, selectedMemberId]);
 
   // --- HANDLER: CLOSE ALL MODALS ---
   const handleCloseModal = () => {
@@ -115,7 +128,7 @@ export default function VaultPage() {
     const filteredLogs = activeProject.logs.filter(l => {
         if (l.memberId === member.id) return true;
         if (!l.memberId && l.type === 'EXPENSE') {
-            return new Date(l.timestamp) >= new Date(member.createdAt);
+            return new Date(l.timestamp).getTime() >= new Date(member.createdAt).getTime();
         }
         return false;
     });
@@ -136,15 +149,19 @@ export default function VaultPage() {
   // --- ASYNC EXECUTION ---
   const handleExecute = async () => {
     if (!activeProject && modalType !== "PROJECT") return;
+
+    // FIX: Bersihkan titik ribuan dan handle NaN agar SQLite tidak crash
+    const amountNum = parseInt(formData.amount.replace(/\./g, '')) || 0;
+
     try {
       if (modalType === "PROJECT" && formData.name) {
         await addProject(formData.name);
       } else if (modalType === "OPERATIVE" && activeProject && formData.name) {
         await addMember(activeProject.id, formData.name, formData.role || "UNIT");
-      } else if (modalType === "INJECTION" && activeProject && formData.amount) {
-        await addExpense(activeProject.id, -parseInt(formData.amount), formData.name || "Initial Injection");
-      } else if (modalType === "EXPENSE" && activeProject && formData.amount) {
-        await addExpense(activeProject.id, parseInt(formData.amount), formData.name || "Operation Log", expenseMemberId);
+      } else if (modalType === "INJECTION" && activeProject && amountNum !== 0) {
+        await addExpense(activeProject.id, -amountNum, formData.name || "Initial Injection");
+      } else if (modalType === "EXPENSE" && activeProject && amountNum !== 0) {
+        await addExpense(activeProject.id, amountNum, formData.name || "Operation Log", expenseMemberId);
       }
       handleCloseModal();
     } catch (err) {
@@ -163,6 +180,7 @@ export default function VaultPage() {
     <div className="flex h-screen w-screen bg-matrix-bg font-mono text-white overflow-hidden select-none relative">
       <div className="absolute inset-0 pointer-events-none scanline opacity-30 z-[100]" />
 
+      {/* --- NOTIFICATION TOAST --- */}
       <AnimatePresence>
         {downloadStatus && (
           <motion.div 
@@ -178,6 +196,7 @@ export default function VaultPage() {
         )}
       </AnimatePresence>
 
+      {/* 1. SIDEBAR NAVIGATION */}
       <aside className="w-20 border-r border-matrix-border bg-matrix-card flex flex-col items-center py-8 gap-6 z-50 flex-shrink-0">
         <motion.button 
           title="Return to System Hub" variants={glitch} whileHover="hover"
@@ -202,6 +221,7 @@ export default function VaultPage() {
         </div>
       </aside>
 
+      {/* 2. MAIN HUD VIEWPORT */}
       <main className="flex-1 flex flex-col p-6 gap-6 min-w-0 overflow-hidden">
         <AnimatePresence mode="wait">
           {isLoading ? (
@@ -224,6 +244,7 @@ export default function VaultPage() {
               </header>
 
               <div className="flex-1 grid grid-cols-12 grid-rows-6 gap-6 overflow-hidden min-h-0">
+                {/* Balance Section */}
                 <section className="col-span-4 row-span-4 border border-matrix-border bg-matrix-card p-6 relative flex flex-col items-center justify-center overflow-hidden">
                   <div className="absolute top-3 left-3 text-[8px] text-matrix-green/40 uppercase font-black tracking-widest">Core_Stability</div>
                   <div className="relative w-full max-w-[220px] aspect-square flex items-center justify-center">
@@ -236,13 +257,14 @@ export default function VaultPage() {
                   </div>
                 </section>
 
+                {/* Members Section */}
                 <section className="col-span-8 row-span-4 border border-matrix-border bg-matrix-card p-5 flex flex-col overflow-hidden">
                   <h2 className="text-[10px] uppercase font-black text-zinc-500 mb-4 tracking-widest flex items-center gap-2 flex-shrink-0 px-2"><Users size={14} className="text-matrix-green" /> Operatives_Linked</h2>
                   <div className="flex-1 grid grid-cols-3 gap-4 overflow-hidden content-start pr-1">
                     {activeProject.members?.slice(0, 6).map((m) => {
                       const impact = (activeProject.balance + (m.totalSpent ?? 0)) > 0 ? ((m.totalSpent ?? 0) / (activeProject.balance + (m.totalSpent ?? 0))) * 100 : 0;
                       return (
-                        <motion.div whileHover={{ scale: 1.02 }} onClick={() => setSelectedMemberId(m.id)} key={m.id} className="border border-matrix-border bg-matrix-card p-4 h-32 flex flex-col justify-between hover:border-matrix-green transition-all group cursor-pointer shadow-lg">
+                        <motion.div whileHover={{ scale: 1.02 }} onClick={() => setSelectedMemberId(m.id)} key={m.id} className="border border-matrix-border bg-matrix-bg p-4 h-32 flex flex-col justify-between hover:border-matrix-green transition-all group cursor-pointer shadow-lg">
                           <div className="flex justify-between items-start"><div className="flex gap-3 min-w-0"><div className="w-10 h-10 bg-zinc-900 border border-matrix-border flex items-center justify-center text-[9px] text-matrix-green/10 font-black">HUD</div><div className="min-w-0"><h3 className="text-[10px] font-black uppercase truncate text-white">{m.name}</h3><p className="text-[8px] text-matrix-green/50 font-black italic truncate uppercase">{m.role}</p></div></div></div>
                           <div className="space-y-1.5"><div className="flex justify-between text-[7px] font-black uppercase tracking-tighter"><span className="text-zinc-600">Spent:</span><span className="text-alert-pink font-bold">{(m.totalSpent ?? 0).toLocaleString()} DP</span></div><div className="h-1 bg-matrix-border w-full overflow-hidden"><motion.div initial={{ width: 0 }} animate={{ width: `${impact}%` }} className="h-full bg-alert-pink shadow-[0_0_10px_#FF2E63]" /></div></div>
                         </motion.div>
@@ -252,6 +274,7 @@ export default function VaultPage() {
                   </div>
                 </section>
 
+                {/* Ledger Stream */}
                 <section className="col-span-9 row-span-2 border border-matrix-border bg-matrix-card overflow-hidden flex flex-col min-h-0 shadow-inner">
                   <div className="bg-matrix-green/5 p-2 border-b border-matrix-border text-[9px] font-black uppercase flex justify-between px-4"><span><Terminal size={12} className="inline mr-2" /> Ledger_Stream // Transaction_History</span><span className="text-zinc-700 tracking-tighter italic">Click Entry for Audit</span></div>
                   <div className="flex-1 overflow-y-auto custom-scrollbar pb-2">
@@ -270,6 +293,7 @@ export default function VaultPage() {
                   </div>
                 </section>
 
+                {/* Commands */}
                 <section className="col-span-3 row-span-2 border border-matrix-border bg-matrix-card p-4 flex flex-col gap-3 justify-center shadow-glow-green/5">
                   <div className="text-[7px] font-black text-matrix-green/30 uppercase mb-1 tracking-[0.3em] text-center">Execute_Command</div>
                   <motion.button title="Inject DP" variants={glitch} whileHover="hover" onClick={() => setModalType("INJECTION")} className="flex justify-between items-center p-3 border border-matrix-green bg-matrix-green/5 text-matrix-green text-[10px] font-black hover:bg-matrix-green hover:text-black transition-all shadow-glow-green font-black">INJECT_DP <ArrowDownCircle size={14} /></motion.button>
