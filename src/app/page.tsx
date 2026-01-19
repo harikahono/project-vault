@@ -2,7 +2,7 @@
 import { motion, AnimatePresence } from "framer-motion";
 import { 
   Activity, Plus, Terminal, ArrowDownCircle, 
-  AlertTriangle, Users, LayoutDashboard, X, FolderPlus, User, Trash2, RotateCcw, FileText, Download, Fingerprint, ShieldCheck, CheckCircle2, Wifi
+  AlertTriangle, Users, LayoutDashboard, X, FolderPlus, User, Trash2, RotateCcw, FileText, Download, Fingerprint, ShieldCheck, CheckCircle2, Wifi, Loader2
 } from 'lucide-react';
 import { useVault } from "@/store/useVault";
 import { cn } from "@/lib/utils";
@@ -22,7 +22,8 @@ const glitch = {
 export default function VaultPage() {
   const { 
     projects, activeProjectId, setActiveProject, 
-    addProject, deleteProject, addMember, addExpense, deleteMember 
+    addProject, deleteProject, addMember, addExpense, deleteMember,
+    fetchProjects, isLoading 
   } = useVault();
   
   const activeProject = projects?.find(p => p.id === activeProjectId);
@@ -36,6 +37,11 @@ export default function VaultPage() {
   const [formData, setFormData] = useState({ name: "", role: "", amount: "" });
   const [expenseMemberId, setExpenseMemberId] = useState(""); 
 
+  // --- STARTUP PROTOCOL ---
+  useEffect(() => {
+    fetchProjects(); 
+  }, [fetchProjects]);
+
   // --- AUTO-HIDE DOWNLOAD NOTIF ---
   useEffect(() => {
     if (downloadStatus) {
@@ -44,12 +50,24 @@ export default function VaultPage() {
     }
   }, [downloadStatus]);
 
-  // --- DERIVED DATA ---
+  // --- DERIVED DATA & SMART FILTERING ---
   const detailMember = activeProject?.members?.find(m => m.id === selectedMemberId);
   const detailLog = activeProject?.logs?.find(l => l.id === selectedLogId);
-  const memberLogs = activeProject?.logs?.filter(l => 
-    l.memberId === selectedMemberId || (!l.memberId && l.type === 'EXPENSE')
-  );
+
+  // PROTOKOL ANTI-WARISAN: Filter log berdasarkan umur unit
+  const memberLogs = activeProject?.logs?.filter(l => {
+    // 1. Tampilkan jika log ini ditujukan langsung (Direct) ke unit tersebut
+    if (l.memberId === selectedMemberId) return true;
+
+    // 2. Tampilkan Shared Expense HANYA jika terjadi SETELAH unit bergabung
+    if (!l.memberId && l.type === 'EXPENSE' && detailMember) {
+      const logTime = new Date(l.timestamp).getTime();
+      const joinTime = new Date(detailMember.createdAt).getTime();
+      return logTime >= joinTime;
+    }
+
+    return false;
+  });
 
   // --- HANDLER: CLOSE ALL MODALS ---
   const handleCloseModal = () => {
@@ -76,7 +94,12 @@ export default function VaultPage() {
     autoTable(doc, {
       startY: (doc as any).lastAutoTable.finalY + 10,
       head: [['TIME', 'TYPE', 'CONTEXT', 'VALUE']],
-      body: (activeProject.logs || []).map(l => [l.timestamp, l.type, l.context, l.value.toLocaleString()]),
+      body: (activeProject.logs || []).map(l => [
+        new Date(l.timestamp).toLocaleTimeString('en-GB'),
+        l.type, 
+        l.context, 
+        l.value.toLocaleString()
+      ]),
     });
     doc.save(`VAULT_${activeProject.name}.pdf`);
     setDownloadStatus("FULL_LEDGER_EXTRACTED");
@@ -87,13 +110,22 @@ export default function VaultPage() {
     const doc = new jsPDF();
     doc.setFont("courier", "bold");
     doc.text(`UNIT AUDIT: ${member.name.toUpperCase()}`, 14, 20);
-    const logs = activeProject.logs.filter(l => l.memberId === member.id || (!l.memberId && l.type === 'EXPENSE'));
+    
+    // Gunakan list yang sudah terfilter untuk PDF unit
+    const filteredLogs = activeProject.logs.filter(l => {
+        if (l.memberId === member.id) return true;
+        if (!l.memberId && l.type === 'EXPENSE') {
+            return new Date(l.timestamp) >= new Date(member.createdAt);
+        }
+        return false;
+    });
+
     autoTable(doc, {
       startY: 40,
       head: [['TIME', 'AUTH', 'CONTEXT', 'MAGNITUDE']],
-      body: logs.map(l => {
+      body: filteredLogs.map(l => {
         const val = !l.memberId ? ((-l.value) / (activeProject.members.length || 1)) : -l.value;
-        return [l.timestamp, !l.memberId ? "SHARED" : "DIRECT", l.context, `${val.toLocaleString()} DP`];
+        return [new Date(l.timestamp).toLocaleTimeString('en-GB'), !l.memberId ? "SHARED" : "DIRECT", l.context, `${val.toLocaleString()} DP`];
       }),
       headStyles: { fillColor: [255, 46, 99] }
     });
@@ -101,23 +133,28 @@ export default function VaultPage() {
     setDownloadStatus(`UNIT_${member.name.toUpperCase()}_DUMPED`);
   };
 
-  const handleExecute = () => {
+  // --- ASYNC EXECUTION ---
+  const handleExecute = async () => {
     if (!activeProject && modalType !== "PROJECT") return;
-    if (modalType === "PROJECT" && formData.name) {
-      addProject(formData.name);
-    } else if (modalType === "OPERATIVE" && activeProject && formData.name) {
-      addMember(activeProject.id, formData.name, formData.role || "UNIT");
-    } else if (modalType === "INJECTION" && activeProject && formData.amount) {
-      addExpense(activeProject.id, -parseInt(formData.amount), formData.name || "Initial Injection");
-    } else if (modalType === "EXPENSE" && activeProject && formData.amount) {
-      addExpense(activeProject.id, parseInt(formData.amount), formData.name || "Operation Log", expenseMemberId);
+    try {
+      if (modalType === "PROJECT" && formData.name) {
+        await addProject(formData.name);
+      } else if (modalType === "OPERATIVE" && activeProject && formData.name) {
+        await addMember(activeProject.id, formData.name, formData.role || "UNIT");
+      } else if (modalType === "INJECTION" && activeProject && formData.amount) {
+        await addExpense(activeProject.id, -parseInt(formData.amount), formData.name || "Initial Injection");
+      } else if (modalType === "EXPENSE" && activeProject && formData.amount) {
+        await addExpense(activeProject.id, parseInt(formData.amount), formData.name || "Operation Log", expenseMemberId);
+      }
+      handleCloseModal();
+    } catch (err) {
+      console.error("EXECUTION_PROTOCOL_FAILED", err);
     }
-    handleCloseModal();
   };
 
-  const handleDecommission = (refund: boolean) => {
+  const handleDecommission = async (refund: boolean) => {
     if (activeProject && selectedMemberId) {
-      deleteMember(activeProject.id, selectedMemberId, refund);
+      await deleteMember(activeProject.id, selectedMemberId, refund);
       handleCloseModal();
     }
   };
@@ -126,7 +163,6 @@ export default function VaultPage() {
     <div className="flex h-screen w-screen bg-matrix-bg font-mono text-white overflow-hidden select-none relative">
       <div className="absolute inset-0 pointer-events-none scanline opacity-30 z-[100]" />
 
-      {/* --- NOTIFICATION TOAST --- */}
       <AnimatePresence>
         {downloadStatus && (
           <motion.div 
@@ -142,14 +178,10 @@ export default function VaultPage() {
         )}
       </AnimatePresence>
 
-      {/* 1. SIDEBAR NAVIGATION */}
       <aside className="w-20 border-r border-matrix-border bg-matrix-card flex flex-col items-center py-8 gap-6 z-50 flex-shrink-0">
-        
-        {/* FIXED: Tombol Home (Box Ijo Atas) */}
         <motion.button 
-          title="Return to System Hub"
-          variants={glitch} whileHover="hover"
-          onClick={() => setActiveProject(null)} // RESET VIEW KE AWAL
+          title="Return to System Hub" variants={glitch} whileHover="hover"
+          onClick={() => setActiveProject(null)} 
           className={cn(
             "p-2 border transition-all shadow-glow-green",
             activeProjectId === null ? "border-matrix-green text-matrix-green bg-matrix-green/10" : "border-matrix-green text-matrix-green"
@@ -163,17 +195,21 @@ export default function VaultPage() {
             <div key={p.id} className="relative group flex items-center justify-center w-full px-2">
               {activeProjectId === p.id && <motion.div layoutId="active-pill" className="absolute left-0 w-1 h-8 bg-matrix-green shadow-[0_0_15px_#00FF9C]" />}
               <motion.button title={p.name} variants={glitch} whileHover="hover" onClick={() => setActiveProject(p.id)} className={cn("w-12 h-12 flex items-center justify-center border text-[10px] font-black transition-all", activeProjectId === p.id ? "border-matrix-green text-matrix-green bg-matrix-green/5" : "border-matrix-border text-zinc-600")}>{p.name?.substring(0, 2).toUpperCase()}</motion.button>
-              <button title="Delete Project" onClick={(e) => { e.stopPropagation(); deleteProject(p.id); }} className="absolute -top-1 right-2 opacity-0 group-hover:opacity-100 bg-alert-pink text-white p-0.5"><X size={10} /></button>
+              <button title="Delete Project" onClick={async (e) => { e.stopPropagation(); await deleteProject(p.id); }} className="absolute -top-1 right-2 opacity-0 group-hover:opacity-100 bg-alert-pink text-white p-0.5"><X size={10} /></button>
             </div>
           ))}
           <button title="Create Project" onClick={() => setModalType("PROJECT")} className="w-12 h-12 border border-dashed border-matrix-border text-zinc-700 hover:text-matrix-green transition-colors"><Plus size={20} /></button>
         </div>
       </aside>
 
-      {/* 2. MAIN HUD VIEWPORT */}
       <main className="flex-1 flex flex-col p-6 gap-6 min-w-0 overflow-hidden">
         <AnimatePresence mode="wait">
-          {activeProject ? (
+          {isLoading ? (
+             <motion.div key="loading" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="h-full flex flex-col items-center justify-center text-center">
+                <Loader2 size={48} className="text-matrix-green animate-spin mb-4 opacity-20" />
+                <p className="text-[10px] text-matrix-green/40 font-black uppercase tracking-[0.5em] animate-pulse">Syncing_Vault_Database...</p>
+             </motion.div>
+          ) : activeProject ? (
             <motion.div key={activeProject.id} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="flex-1 flex flex-col gap-6 overflow-hidden">
               <header className="flex justify-between items-center border-b border-matrix-border pb-4 flex-shrink-0">
                 <div className="flex items-center gap-4">
@@ -206,7 +242,7 @@ export default function VaultPage() {
                     {activeProject.members?.slice(0, 6).map((m) => {
                       const impact = (activeProject.balance + (m.totalSpent ?? 0)) > 0 ? ((m.totalSpent ?? 0) / (activeProject.balance + (m.totalSpent ?? 0))) * 100 : 0;
                       return (
-                        <motion.div whileHover={{ scale: 1.02 }} onClick={() => setSelectedMemberId(m.id)} key={m.id} className="border border-matrix-border bg-matrix-bg p-4 h-32 flex flex-col justify-between hover:border-matrix-green transition-all group cursor-pointer shadow-lg">
+                        <motion.div whileHover={{ scale: 1.02 }} onClick={() => setSelectedMemberId(m.id)} key={m.id} className="border border-matrix-border bg-matrix-card p-4 h-32 flex flex-col justify-between hover:border-matrix-green transition-all group cursor-pointer shadow-lg">
                           <div className="flex justify-between items-start"><div className="flex gap-3 min-w-0"><div className="w-10 h-10 bg-zinc-900 border border-matrix-border flex items-center justify-center text-[9px] text-matrix-green/10 font-black">HUD</div><div className="min-w-0"><h3 className="text-[10px] font-black uppercase truncate text-white">{m.name}</h3><p className="text-[8px] text-matrix-green/50 font-black italic truncate uppercase">{m.role}</p></div></div></div>
                           <div className="space-y-1.5"><div className="flex justify-between text-[7px] font-black uppercase tracking-tighter"><span className="text-zinc-600">Spent:</span><span className="text-alert-pink font-bold">{(m.totalSpent ?? 0).toLocaleString()} DP</span></div><div className="h-1 bg-matrix-border w-full overflow-hidden"><motion.div initial={{ width: 0 }} animate={{ width: `${impact}%` }} className="h-full bg-alert-pink shadow-[0_0_10px_#FF2E63]" /></div></div>
                         </motion.div>
@@ -223,7 +259,7 @@ export default function VaultPage() {
                       <tbody className="divide-y divide-matrix-border/30">
                         {activeProject.logs?.map((log) => (
                           <tr key={log.id} onClick={() => setSelectedLogId(log.id)} className="hover:bg-matrix-green/10 transition-colors group cursor-pointer">
-                            <td className="p-3 text-matrix-green/40 italic uppercase whitespace-nowrap px-4">{log.timestamp}</td>
+                            <td className="p-3 text-matrix-green/40 italic uppercase whitespace-nowrap px-4">{new Date(log.timestamp).toLocaleTimeString('en-GB')}</td>
                             <td className="p-3 px-1"><span className={cn("px-2 py-0.5 border text-[7px] font-black uppercase", log.type === 'EXPENSE' ? "border-alert-pink text-alert-pink" : "border-matrix-green text-matrix-green")}>{log.type}</span></td>
                             <td className="p-3 opacity-60 italic truncate max-w-[400px]">"{log.context}"</td>
                             <td className={cn("p-3 text-right font-black whitespace-nowrap px-4", log.value < 0 ? "text-alert-pink" : "text-matrix-green")}>{(log.value ?? 0).toLocaleString()} DP</td>
@@ -242,16 +278,13 @@ export default function VaultPage() {
               </div>
             </motion.div>
           ) : (
-            /* EMPTY HUD STATE: PROTOCOL INITIALIZATION */
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="h-full flex flex-col items-center justify-center text-center p-12">
               <FolderPlus size={64} className="text-matrix-green/20 mb-8 animate-pulse" />
               <div className="space-y-2 mb-10">
-                <h2 className="text-xl font-black italic uppercase tracking-[0.5em] text-matrix-green">Vault_System_By_harikahono</h2>
+                <h2 className="text-xl font-black italic uppercase tracking-[0.5em] text-matrix-green">Vault_By_harikahono</h2>
                 <p className="text-[10px] text-zinc-600 uppercase tracking-widest">Terminal_Awaiting_Data_Input // Select_Vault_To_Begin</p>
               </div>
-              <button title="Init New Project" onClick={() => setModalType("PROJECT")} className="px-12 py-4 border border-matrix-green text-matrix-green text-[10px] font-black tracking-[0.5em] hover:bg-matrix-green hover:text-black transition-all shadow-glow-green">
-                INITIALIZE_NEW_VAULT
-              </button>
+              <button title="Init New Project" onClick={() => setModalType("PROJECT")} className="px-12 py-4 border border-matrix-green text-matrix-green text-[10px] font-black tracking-[0.5em] hover:bg-matrix-green hover:text-black transition-all shadow-glow-green">INITIALIZE_NEW_VAULT</button>
             </motion.div>
           )}
         </AnimatePresence>
@@ -275,6 +308,7 @@ export default function VaultPage() {
                   </div>
                   <button title="Close" onClick={handleCloseModal} className="ml-4 text-zinc-600 hover:text-alert-pink transition-colors"><X size={24} /></button>
                 </div>
+                
                 <AnimatePresence>
                   {isConfirmingDelete && (
                     <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="mb-6 border border-alert-pink bg-alert-pink/5 p-6 overflow-hidden">
@@ -286,12 +320,13 @@ export default function VaultPage() {
                     </motion.div>
                   )}
                 </AnimatePresence>
+
                 <div className="flex-1 overflow-y-auto custom-scrollbar bg-matrix-bg p-4 shadow-inner border border-matrix-border/50">
                    <table className="w-full text-[10px]">
                       <tbody className="divide-y divide-matrix-border/20">
                         {memberLogs?.map((log) => (
                           <tr key={log.id} className="hover:bg-matrix-green/5">
-                            <td className="py-3 text-matrix-green/30 italic whitespace-nowrap">{log.timestamp}</td>
+                            <td className="py-3 text-matrix-green/30 italic whitespace-nowrap">{new Date(log.timestamp).toLocaleTimeString('en-GB')}</td>
                             <td className="py-3 px-4"><span className={cn("px-2 py-0.5 border text-[8px] font-black uppercase", !log.memberId ? "border-zinc-700 text-zinc-700" : "border-alert-pink text-alert-pink")}>{!log.memberId ? "SHARED" : "DIRECT"}</span></td>
                             <td className="py-3 opacity-80 uppercase tracking-tighter truncate max-w-[200px]">"{log.context}"</td>
                             <td className="py-3 text-right font-black text-alert-pink">{(!log.memberId ? ((-log.value) / (activeProject?.members?.length || 1)) : -log.value).toLocaleString()} DP</td>
@@ -318,7 +353,7 @@ export default function VaultPage() {
                 <div className="space-y-6">
                   <div className="grid grid-cols-2 gap-4">
                     <div className="p-3 bg-matrix-bg border border-matrix-border"><p className="text-[7px] text-zinc-600 uppercase font-black mb-1">Auth_Protocol</p><p className="text-[10px] font-black text-matrix-green">{detailLog.type}</p></div>
-                    <div className="p-3 bg-matrix-bg border border-matrix-border"><p className="text-[7px] text-zinc-600 uppercase font-black mb-1">Time_Sync</p><p className="text-[10px] font-black text-white">{detailLog.timestamp}</p></div>
+                    <div className="p-3 bg-matrix-bg border border-matrix-border"><p className="text-[7px] text-zinc-600 uppercase font-black mb-1">Time_Sync</p><p className="text-[10px] font-black text-white">{new Date(detailLog.timestamp).toLocaleTimeString('en-GB')}</p></div>
                   </div>
                   <div className="p-4 bg-matrix-bg border border-matrix-border relative overflow-hidden">
                     <div className="absolute top-0 right-0 p-1 opacity-10"><Fingerprint size={40} /></div>

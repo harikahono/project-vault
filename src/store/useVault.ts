@@ -1,171 +1,135 @@
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
+import { getDb } from '@/lib/db';
 
-// --- INTERFACES ---
-
-interface Member {
-  id: string;
-  name: string;
-  role: string;
-  totalSpent: number;
+interface Member { 
+  id: string; 
+  name: string; 
+  role: string; 
+  totalSpent: number; 
+  createdAt: string; // Tambahkan field ini
 }
 
-interface Log {
-  id: string;
-  timestamp: string;
-  type: 'EXPENSE' | 'INJECTION';
-  context: string;
-  value: number; 
-  memberId?: string; 
-}
-
-interface Project {
-  id: string;
-  name: string;
-  balance: number;
-  members: Member[];
-  logs: Log[];
-}
+interface Log { id: string; timestamp: string; type: 'EXPENSE' | 'INJECTION'; context: string; value: number; memberId?: string; }
+interface Project { id: string; name: string; balance: number; members: Member[]; logs: Log[]; }
 
 interface VaultState {
   projects: Project[];
   activeProjectId: string | null;
-  addProject: (name: string) => void;
+  isLoading: boolean;
+  isProcessing: boolean;
+  fetchProjects: () => Promise<void>;
   setActiveProject: (id: string | null) => void;
-  deleteProject: (id: string) => void;
-  addMember: (projectId: string, name: string, role: string) => void;
-  // Menambahkan fungsi Decommissioning
-  deleteMember: (projectId: string, memberId: string, refund: boolean) => void;
-  addExpense: (projectId: string, amount: number, context: string, memberId?: string) => void;
+  addProject: (name: string) => Promise<void>;
+  deleteProject: (id: string) => Promise<void>;
+  addMember: (projectId: string, name: string, role: string) => Promise<void>;
+  deleteMember: (projectId: string, memberId: string, refund: boolean) => Promise<void>;
+  addExpense: (projectId: string, amount: number, context: string, memberId?: string) => Promise<void>;
 }
 
-// --- STORE IMPLEMENTATION ---
+export const useVault = create<VaultState>((set, get) => ({
+  projects: [],
+  activeProjectId: null,
+  isLoading: false,
+  isProcessing: false,
 
-export const useVault = create<VaultState>()(
-  persist(
-    (set) => ({
-      projects: [],
-      activeProjectId: null,
+  fetchProjects: async () => {
+    try {
+      set({ isLoading: true });
+      const db = await getDb();
+      
+      const rawP: any[] = await db.select("SELECT * FROM projects");
+      const rawM: any[] = await db.select("SELECT * FROM members");
+      const rawL: any[] = await db.select("SELECT * FROM logs ORDER BY timestamp DESC");
 
-      addProject: (name) => set((state) => {
-        const newProject: Project = {
-          id: crypto.randomUUID(),
-          name,
-          balance: 0, 
-          members: [],
-          logs: []
-        };
-        return { 
-          projects: [...state.projects, newProject],
-          activeProjectId: state.activeProjectId || newProject.id 
-        };
-      }),
+      const formatted: Project[] = rawP.map(p => ({
+        id: p.id, name: p.name, balance: p.balance,
+        members: rawM.filter(m => m.project_id === p.id).map(m => ({ 
+          id: m.id, name: m.name, role: m.role, 
+          totalSpent: m.total_spent, // Fix Mapping Burn
+          createdAt: m.created_at   // Akte kelahiran unit
+        })),
+        logs: rawL.filter(l => l.project_id === p.id).map(l => ({ 
+          id: l.id, timestamp: l.timestamp, type: l.type, context: l.context, value: l.value, memberId: l.member_id 
+        }))
+      }));
+      
+      set({ projects: formatted, isLoading: false });
+      const saved = localStorage.getItem('vault_active_id');
+      if (saved && formatted.some(p => p.id === saved)) set({ activeProjectId: saved });
+    } catch (err) { set({ isLoading: false }); }
+  },
 
-      setActiveProject: (id) => set({ activeProjectId: id }),
+  setActiveProject: (id) => {
+    id ? localStorage.setItem('vault_active_id', id) : localStorage.removeItem('vault_active_id');
+    set({ activeProjectId: id });
+  },
 
-      deleteProject: (id) => set((state) => ({
-        projects: state.projects.filter(p => p.id !== id),
-        activeProjectId: state.activeProjectId === id 
-          ? (state.projects.length > 1 ? state.projects[0].id : null) 
-          : state.activeProjectId
-      })),
+  addProject: async (name) => {
+    const db = await getDb();
+    const id = crypto.randomUUID();
+    await db.execute("INSERT OR REPLACE INTO projects (id, name, balance) VALUES ($1, $2, $3)", [id, name, 0]);
+    await get().fetchProjects();
+    get().setActiveProject(id);
+  },
 
-      addMember: (projectId, name, role) => set((state) => ({
-        projects: state.projects.map(p => 
-          p.id === projectId 
-            ? { 
-                ...p, 
-                members: [
-                  ...p.members, 
-                  { id: crypto.randomUUID(), name, role, totalSpent: 0 }
-                ] 
-              }
-            : p
-        )
-      })),
+  addMember: async (projectId, name, role) => {
+    const db = await getDb();
+    const now = new Date().toISOString(); // Simpan waktu join
+    await db.execute(
+      "INSERT INTO members (id, project_id, name, role, total_spent, created_at) VALUES ($1, $2, $3, $4, $5, $6)", 
+      [crypto.randomUUID(), projectId, name, role, 0, now]
+    );
+    await get().fetchProjects();
+  },
 
-      /**
-       * UNIT DECOMMISSIONING LOGIC:
-       * - Jika refund = true: Kembalikan semua totalSpent member ke balance projek.
-       * - Jika refund = false: Member dihapus, pengeluaran tetap dianggap hangus.
-       */
-      deleteMember: (projectId, memberId, refund) => set((state) => ({
-        projects: state.projects.map(p => {
-          if (p.id !== projectId) return p;
-          
-          const memberToDelete = p.members.find(m => m.id === memberId);
-          if (!memberToDelete) return p;
+  deleteMember: async (projectId, memberId, refund) => {
+    if (get().isProcessing) return;
+    set({ isProcessing: true });
+    const db = await getDb();
+    const p = get().projects.find(x => x.id === projectId);
+    const m = p?.members.find(x => x.id === memberId);
+    if (!m) { set({ isProcessing: false }); return; }
 
-          const refundAmount = refund ? memberToDelete.totalSpent : 0;
-          const logContext = refund 
-            ? `UNIT_DECOMMISSIONED: ${memberToDelete.name} (Refunding ${refundAmount.toLocaleString()} DP)` 
-            : `UNIT_DECOMMISSIONED: ${memberToDelete.name} (Funds Retained)`;
+    try {
+      await db.execute("BEGIN IMMEDIATE TRANSACTION");
+      const refundAmt = refund ? m.totalSpent : 0;
+      await db.execute("UPDATE projects SET balance = balance + $1 WHERE id = $2", [refundAmt, projectId]);
+      await db.execute("DELETE FROM members WHERE id = $1", [memberId]);
+      await db.execute("INSERT INTO logs (id, project_id, timestamp, type, context, value) VALUES ($1, $2, $3, $4, $5, $6)", [crypto.randomUUID(), projectId, new Date().toISOString(), 'INJECTION', `DECOMMISSION: ${m.name}`, refundAmt]);
+      await db.execute("COMMIT");
+    } catch (e) { await db.execute("ROLLBACK").catch(() => {}); }
+    finally { set({ isProcessing: false }); await get().fetchProjects(); }
+  },
 
-          return {
-            ...p,
-            balance: p.balance + refundAmount, // Mengembalikan dana jika dipilih refund
-            members: p.members.filter(m => m.id !== memberId),
-            logs: [
-              {
-                id: crypto.randomUUID(),
-                timestamp: new Date().toLocaleTimeString('en-GB', { hour12: false }),
-                type: refund ? 'INJECTION' : 'EXPENSE',
-                context: logContext,
-                value: refund ? refundAmount : 0 // Dicatat sebagai penyesuaian di log
-              },
-              ...p.logs
-            ]
-          };
-        })
-      })),
+  addExpense: async (projectId, amount, context, memberId) => {
+    if (get().isProcessing) return;
+    set({ isProcessing: true });
+    const db = await getDb();
+    const project = get().projects.find(p => p.id === projectId);
+    if (!project) { set({ isProcessing: false }); return; }
 
-      /**
-       * MONEY FLOW + DYNAMIC SPLIT LOGIC:
-       * - Jika memberId ada: Beban masuk ke 1 orang secara penuh.
-       * - Jika memberId kosong: Beban dibagi rata ke SEMUA anggota yang aktif.
-       */
-      addExpense: (projectId, amount, context, memberId) => set((state) => ({
-        projects: state.projects.map(p => {
-          if (p.id !== projectId) return p;
+    try {
+      await db.execute("BEGIN IMMEDIATE TRANSACTION");
+      await db.execute("UPDATE projects SET balance = balance - $1 WHERE id = $2", [amount, projectId]);
 
-          const isExpense = amount > 0;
-          let updatedMembers = [...p.members];
+      if (amount > 0) {
+        if (memberId) {
+          await db.execute("UPDATE members SET total_spent = total_spent + $1 WHERE id = $2", [amount, memberId]);
+        } else if (project.members.length > 0) {
+          const split = amount / project.members.length;
+          await db.execute("UPDATE members SET total_spent = total_spent + $1 WHERE project_id = $2", [split, projectId]);
+        }
+      }
 
-          if (isExpense) {
-            if (memberId) {
-              // CASE 1: Pengeluaran Individu
-              updatedMembers = p.members.map(m => 
-                m.id === memberId ? { ...m, totalSpent: m.totalSpent + amount } : m
-              );
-            } else if (p.members.length > 0) {
-              // CASE 2: Pengeluaran Kolektif (Shared Split)
-              const splitAmount = amount / p.members.length;
-              updatedMembers = p.members.map(m => ({
-                ...m,
-                totalSpent: m.totalSpent + splitAmount
-              }));
-            }
-          }
+      await db.execute("INSERT INTO logs (id, project_id, member_id, timestamp, type, context, value) VALUES ($1, $2, $3, $4, $5, $6, $7)", [crypto.randomUUID(), projectId, memberId || null, new Date().toISOString(), 'EXPENSE', !memberId ? `${context} (SHARED)` : context, -amount]);
+      await db.execute("COMMIT");
+    } catch (e) { await db.execute("ROLLBACK").catch(() => {}); }
+    finally { set({ isProcessing: false }); await get().fetchProjects(); }
+  },
 
-          return { 
-            ...p, 
-            balance: p.balance - amount,
-            members: updatedMembers,
-            logs: [
-              { 
-                id: crypto.randomUUID(), 
-                timestamp: new Date().toLocaleTimeString('en-GB', { hour12: false }), 
-                type: isExpense ? 'EXPENSE' : 'INJECTION', 
-                context: !memberId && isExpense ? `${context} (SHARED_SPLIT)` : context, 
-                value: -amount,
-                memberId: isExpense ? memberId : undefined 
-              }, 
-              ...p.logs
-            ] 
-          };
-        })
-      }))
-    }),
-    { name: 'vault-multi-project-storage' }
-  )
-);
+  deleteProject: async (id) => {
+    const db = await getDb();
+    await db.execute("DELETE FROM projects WHERE id = $1", [id]);
+    await get().fetchProjects();
+  }
+}));
