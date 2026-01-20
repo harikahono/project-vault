@@ -87,7 +87,7 @@ pnpm tauri build
 
 ---
 
-**Developed by [harikahono**](https://www.google.com/search?q=https://github.com/harikahono)
+Developed by [harikahono](https://www.google.com/search?q=https://github.com/harikahono)
 *"Secure the funds. Track the burn. Rule the sprawl."*
 
 ---
