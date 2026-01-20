@@ -16,7 +16,7 @@ interface Log {
   context: string;
   value: number;
   memberId?: string;
-  participant_count: number; // Kolom baru untuk hitung akurat saat void shared expense
+  participant_count: number;
 }
 
 interface Project {
@@ -81,7 +81,7 @@ export const useVault = create<VaultState>((set, get) => ({
             context: l.context,
             value: l.value,
             memberId: l.member_id,
-            participant_count: l.participant_count || 1, // fallback kalau DB lama
+            participant_count: l.participant_count || 1,
           })),
       }));
 
@@ -127,47 +127,56 @@ export const useVault = create<VaultState>((set, get) => ({
     if (get().isProcessing) return;
     set({ isProcessing: true });
 
-    try {
-      const db = await getDb();
+    const db = await getDb();
+    let retries = 0;
+    const maxRetries = 3;
 
-      // Ambil data real-time
-      const currentMembers: any[] = await db.select("SELECT id FROM members WHERE project_id = $1", [projectId]);
-      const memberCount = currentMembers.length;
-      const isExp = amount > 0;
-      const now = new Date().toISOString();
-      const logId = crypto.randomUUID();
+    while (retries < maxRetries) {
+      try {
+        const currentMembers: any[] = await db.select("SELECT id FROM members WHERE project_id = $1", [projectId]);
+        const memberCount = currentMembers.length;
+        const isExp = amount > 0;
+        const now = new Date().toISOString();
+        const logId = crypto.randomUUID();
 
-      await db.execute("BEGIN TRANSACTION");
+        await db.execute("BEGIN TRANSACTION");
 
-      // 1. Update balance project
-      await db.execute("UPDATE projects SET balance = balance - $1 WHERE id = $2", [amount, projectId]);
+        await db.execute("UPDATE projects SET balance = balance - $1 WHERE id = $2", [amount, projectId]);
 
-      // 2. Update member spent (jika expense)
-      if (isExp) {
-        if (memberId) {
-          await db.execute("UPDATE members SET total_spent = total_spent + $1 WHERE id = $2", [amount, memberId]);
-        } else if (memberCount > 0) {
-          const split = amount / memberCount;
-          await db.execute("UPDATE members SET total_spent = total_spent + $1 WHERE project_id = $2", [split, projectId]);
+        if (isExp) {
+          if (memberId) {
+            await db.execute("UPDATE members SET total_spent = total_spent + $1 WHERE id = $2", [amount, memberId]);
+          } else if (memberCount > 0) {
+            const split = amount / memberCount;
+            await db.execute("UPDATE members SET total_spent = total_spent + $1 WHERE project_id = $2", [split, projectId]);
+          }
         }
+
+        const logCtx = !memberId && isExp ? `${context} (SHARED_SPLIT)` : context;
+        await db.execute(
+          "INSERT INTO logs (id, project_id, member_id, timestamp, type, context, value, participant_count) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+          [logId, projectId, memberId || null, now, isExp ? 'EXPENSE' : 'INJECTION', logCtx, -amount, memberCount || 1]
+        );
+
+        await db.execute("COMMIT");
+        console.log("✓ Transaction_Secured");
+        break; // Sukses, keluar loop
+      } catch (e: any) {
+        await db.execute("ROLLBACK").catch(() => {});
+        console.error("TRANSACTION_ERROR (retry " + (retries + 1) + "):", e);
+
+        if (e.message?.includes("database is locked") && retries < maxRetries - 1) {
+          retries++;
+          await new Promise(r => setTimeout(r, 500 * retries)); // backoff
+          continue;
+        }
+
+        console.error("CRITICAL_TRANSACTION_FAILURE:", e);
+        break;
+      } finally {
+        set({ isProcessing: false });
+        await get().fetchProjects();
       }
-
-      // 3. Catat log + participant_count (penting untuk void akurat)
-      const logCtx = !memberId && isExp ? `${context} (SHARED_SPLIT)` : context;
-      await db.execute(
-        "INSERT INTO logs (id, project_id, member_id, timestamp, type, context, value, participant_count) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
-        [logId, projectId, memberId || null, now, isExp ? 'EXPENSE' : 'INJECTION', logCtx, -amount, memberCount || 1]
-      );
-
-      await db.execute("COMMIT");
-      console.log("✓ Transaction_Secured");
-    } catch (e) {
-      const db = await getDb();
-      await db.execute("ROLLBACK").catch(() => {});
-      console.error("CRITICAL_TRANSACTION_FAILURE:", e);
-    } finally {
-      set({ isProcessing: false });
-      await get().fetchProjects();
     }
   },
 
@@ -175,45 +184,54 @@ export const useVault = create<VaultState>((set, get) => ({
     if (get().isProcessing) return;
     set({ isProcessing: true });
 
-    try {
-      const db = await getDb();
-      const logs: any[] = await db.select("SELECT * FROM logs WHERE id = $1 AND project_id = $2", [logId, projectId]);
-      if (logs.length === 0) throw new Error("LOG_NOT_FOUND");
+    const db = await getDb();
+    let retries = 0;
+    const maxRetries = 3;
 
-      const log = logs[0];
+    while (retries < maxRetries) {
+      try {
+        const logs: any[] = await db.select("SELECT * FROM logs WHERE id = $1 AND project_id = $2", [logId, projectId]);
+        if (logs.length === 0) throw new Error("LOG_NOT_FOUND");
 
-      await db.execute("BEGIN TRANSACTION");
+        const log = logs[0];
 
-      // 1. Reverse saldo project
-      await db.execute("UPDATE projects SET balance = balance - $1 WHERE id = $2", [log.value, projectId]);
+        await db.execute("BEGIN TRANSACTION");
 
-      // 2. Reverse member spent (hanya jika EXPENSE)
-      if (log.type === 'EXPENSE') {
-        if (log.member_id) {
-          // Direct expense
-          await db.execute("UPDATE members SET total_spent = total_spent + $1 WHERE id = $2", [log.value, log.member_id]);
-        } else {
-          // Shared expense: gunakan participant_count dari log + filter waktu join
-          const splitDiff = log.value / (log.participant_count || 1);
-          await db.execute(
-            "UPDATE members SET total_spent = total_spent + $1 WHERE project_id = $2 AND created_at <= $3",
-            [splitDiff, projectId, log.timestamp]
-          );
+        await db.execute("UPDATE projects SET balance = balance - $1 WHERE id = $2", [log.value, projectId]);
+
+        if (log.type === 'EXPENSE') {
+          if (log.member_id) {
+            await db.execute("UPDATE members SET total_spent = total_spent + $1 WHERE id = $2", [log.value, log.member_id]);
+          } else {
+            const splitDiff = log.value / (log.participant_count || 1);
+            await db.execute(
+              "UPDATE members SET total_spent = total_spent + $1 WHERE project_id = $2 AND created_at <= $3",
+              [splitDiff, projectId, log.timestamp]
+            );
+          }
         }
+
+        await db.execute("DELETE FROM logs WHERE id = $1", [logId]);
+
+        await db.execute("COMMIT");
+        console.log("✓ Void_Success");
+        break;
+      } catch (e: any) {
+        await db.execute("ROLLBACK").catch(() => {});
+        console.error("VOID_ERROR (retry " + (retries + 1) + "):", e);
+
+        if (e.message?.includes("database is locked") && retries < maxRetries - 1) {
+          retries++;
+          await new Promise(r => setTimeout(r, 500 * retries));
+          continue;
+        }
+
+        console.error("VOID_FAILED:", e);
+        break;
+      } finally {
+        set({ isProcessing: false });
+        await get().fetchProjects();
       }
-
-      // 3. Hapus log
-      await db.execute("DELETE FROM logs WHERE id = $1", [logId]);
-
-      await db.execute("COMMIT");
-      console.log("✓ Void_Success");
-    } catch (e) {
-      const db = await getDb();
-      await db.execute("ROLLBACK").catch(() => {});
-      console.error("VOID_FAILED:", e);
-    } finally {
-      set({ isProcessing: false });
-      await get().fetchProjects();
     }
   },
 
@@ -221,36 +239,50 @@ export const useVault = create<VaultState>((set, get) => ({
     if (get().isProcessing) return;
     set({ isProcessing: true });
 
-    try {
-      const db = await getDb();
-      const members: any[] = await db.select("SELECT total_spent, name FROM members WHERE id = $1", [memberId]);
-      if (members.length === 0) throw new Error("UNIT_NOT_FOUND");
+    const db = await getDb();
+    let retries = 0;
+    const maxRetries = 3;
 
-      const m = members[0];
-      const refundAmt = refund ? m.total_spent : 0;
-      const now = new Date().toISOString();
+    while (retries < maxRetries) {
+      try {
+        const members: any[] = await db.select("SELECT total_spent, name FROM members WHERE id = $1", [memberId]);
+        if (members.length === 0) throw new Error("UNIT_NOT_FOUND");
 
-      await db.execute("BEGIN TRANSACTION");
+        const m = members[0];
+        const refundAmt = refund ? m.total_spent : 0;
+        const now = new Date().toISOString();
 
-      if (refund) {
-        await db.execute("UPDATE projects SET balance = balance + $1 WHERE id = $2", [refundAmt, projectId]);
+        await db.execute("BEGIN TRANSACTION");
+
+        if (refund) {
+          await db.execute("UPDATE projects SET balance = balance + $1 WHERE id = $2", [refundAmt, projectId]);
+        }
+
+        await db.execute("DELETE FROM members WHERE id = $1", [memberId]);
+
+        await db.execute(
+          "INSERT INTO logs (id, project_id, timestamp, type, context, value, participant_count) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+          [crypto.randomUUID(), projectId, now, 'INJECTION', `UNIT_DECOMMISSIONED: ${m.name}`, refundAmt, 1]
+        );
+
+        await db.execute("COMMIT");
+        break;
+      } catch (e: any) {
+        await db.execute("ROLLBACK").catch(() => {});
+        console.error("DECOMMISSION_ERROR (retry " + (retries + 1) + "):", e);
+
+        if (e.message?.includes("database is locked") && retries < maxRetries - 1) {
+          retries++;
+          await new Promise(r => setTimeout(r, 500 * retries));
+          continue;
+        }
+
+        console.error("DECOMMISSION_FAILED", e);
+        break;
+      } finally {
+        set({ isProcessing: false });
+        await get().fetchProjects();
       }
-
-      await db.execute("DELETE FROM members WHERE id = $1", [memberId]);
-
-      await db.execute(
-        "INSERT INTO logs (id, project_id, timestamp, type, context, value, participant_count) VALUES ($1, $2, $3, $4, $5, $6, $7)",
-        [crypto.randomUUID(), projectId, now, 'INJECTION', `UNIT_DECOMMISSIONED: ${m.name}`, refundAmt, 1]
-      );
-
-      await db.execute("COMMIT");
-    } catch (e) {
-      const db = await getDb();
-      await db.execute("ROLLBACK").catch(() => {});
-      console.error("DECOMMISSION_FAILED", e);
-    } finally {
-      set({ isProcessing: false });
-      await get().fetchProjects();
     }
   },
 

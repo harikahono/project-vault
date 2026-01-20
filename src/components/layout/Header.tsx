@@ -3,6 +3,7 @@ import { Activity, FileText, Wifi } from 'lucide-react';
 interface HeaderProps {
   projectName: string;
   onExportPDF: () => void;
+  downloadStatus?: string | null;
 }
 
 export default function Header({ projectName, onExportPDF }: HeaderProps) {

@@ -9,6 +9,10 @@ export const initDatabase = async (): Promise<Database> => {
 
   const db = await Database.load(DB_NAME);
 
+  await db.execute("PRAGMA journal_mode = WAL;");
+  await db.execute("PRAGMA busy_timeout = 5000;");
+  await db.execute("PRAGMA foreign_keys = ON;");
+
   // ───────────────────────────────────────────────
   // Migration-friendly pattern + versi tabel
   // ───────────────────────────────────────────────

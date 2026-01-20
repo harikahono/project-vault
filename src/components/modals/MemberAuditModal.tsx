@@ -11,10 +11,10 @@ interface MemberAuditModalProps {
   onClose: () => void;
   onExportPDF: (m: any) => void;
   onDecommission: (refund: boolean) => Promise<void>;
-  memberCount: number;
+  memberCount: number; // Tetap ada agar tidak error di page.tsx
 }
 
-export default function MemberAuditModal({ isOpen, member, logs, isProcessing, onClose, onExportPDF, onDecommission, memberCount }: MemberAuditModalProps) {
+export default function MemberAuditModal({ isOpen, member, logs, isProcessing, onClose, onExportPDF, onDecommission }: MemberAuditModalProps) {
   const [isConfirmingDelete, setIsConfirmingDelete] = useState(false);
 
   if (!isOpen || !member) return null;
@@ -73,7 +73,13 @@ export default function MemberAuditModal({ isOpen, member, logs, isProcessing, o
                   <td className="py-3 text-matrix-green/30 italic whitespace-nowrap">{new Date(log.timestamp).toLocaleTimeString('en-GB')}</td>
                   <td className="py-3 px-4"><span className={cn("px-2 py-0.5 border text-[8px] font-black uppercase", !log.memberId ? "border-zinc-700 text-zinc-700" : "border-alert-pink text-alert-pink")}>{!log.memberId ? "SHARED" : "DIRECT"}</span></td>
                   <td className="py-3 opacity-80 uppercase tracking-tighter truncate max-w-[200px]">"{log.context}"</td>
-                  <td className="py-3 text-right font-black text-alert-pink">{(!log.memberId ? ((-log.value) / (memberCount || 1)) : -log.value).toLocaleString()} DP</td>
+                  {/* UPDATE: Pembagi diganti dari memberCount menjadi log.participant_count agar akurat */}
+                  <td className="py-3 text-right font-black text-alert-pink">
+                    {(!log.memberId 
+                      ? ((-log.value) / (log.participant_count || 1)) 
+                      : -log.value
+                    ).toLocaleString()} DP
+                  </td>
                 </tr>
               ))}
             </tbody>

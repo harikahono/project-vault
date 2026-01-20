@@ -1,23 +1,20 @@
 "use client"
-import { AnimatePresence, motion } from "framer-motion";
-import { FolderPlus, Loader2 } from 'lucide-react'; // FIX: Tambah Loader2 di sini
-import { useVault } from "@/store/useVault";
 import { useState, useEffect, useMemo } from "react";
+import { AnimatePresence, motion } from "framer-motion";
+import { FolderPlus, Loader2 } from 'lucide-react';
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 
-// Modular Components
+import { useVault } from "@/store/useVault";
 import Sidebar from "@/components/layout/Sidebar";
 import Header from "@/components/layout/Header";
 import BalanceCard from "@/components/dashboard/BalanceCard";
 import MemberGrid from "@/components/dashboard/MemberGrid";
 import LedgerStream from "@/components/dashboard/LedgerStream";
 import CommandPanel from "@/components/layout/CommandPanel";
-
-// Modals
-import ActionModal from "@/components/modals/ActionModal";
 import MemberAuditModal from "@/components/modals/MemberAuditModal";
 import LogAuditModal from "@/components/modals/LogAuditModal";
+import ActionModal from "@/components/modals/ActionModal";
 
 export default function VaultPage() {
   const { 
@@ -70,17 +67,11 @@ export default function VaultPage() {
   };
 
   const handleExecute = async () => {
-    if (isProcessing) return;
-    // Guard untuk TypeScript: Mencegah eksekusi jika activeProject undefined kecuali untuk proyek baru
-    if (!activeProject && modalType !== "PROJECT") return;
-
-    const cleanAmount = formData.amount.toString().replace(/\./g, '');
-    const amountNum = parseInt(cleanAmount) || 0;
-    
+    if (isProcessing || (!activeProject && modalType !== "PROJECT")) return;
+    const amountNum = parseInt(formData.amount.toString().replace(/\./g, '')) || 0;
     try {
-      if (modalType === "PROJECT" && formData.name) {
-        await addProject(formData.name);
-      } else if (activeProject) { // Guard tambahan untuk TS
+      if (modalType === "PROJECT" && formData.name) await addProject(formData.name);
+      else if (activeProject) {
         if (modalType === "OPERATIVE" && formData.name) await addMember(activeProject.id, formData.name, formData.role || "UNIT");
         else if (modalType === "INJECTION" && amountNum !== 0) await addExpense(activeProject.id, -amountNum, formData.name || "Initial Injection");
         else if (modalType === "EXPENSE" && amountNum !== 0) await addExpense(activeProject.id, amountNum, formData.name || "Operation Log", expenseMemberId);
@@ -96,7 +87,7 @@ export default function VaultPage() {
     doc.text(`VAULT REPORT: ${activeProject.name.toUpperCase()}`, 14, 20);
     autoTable(doc, {
       startY: 30, head: [['UNIT', 'ROLE', 'BURNED']],
-      body: (activeProject.members || []).map((m: any) => [m.name, m.role, `${(m.totalSpent ?? 0).toLocaleString()} DP`]),
+      body: (activeProject.members || []).map((m: any) => [m.name, m.role, `${m.totalSpent.toLocaleString()} DP`]),
       headStyles: { fillColor: [0, 255, 156], textColor: [0, 0, 0] }
     });
     autoTable(doc, {
@@ -115,7 +106,11 @@ export default function VaultPage() {
     const logs = activeProject.logs.filter((l: any) => l.memberId === member.id || (!l.memberId && l.type === 'EXPENSE' && new Date(l.timestamp).getTime() >= (new Date(member.createdAt).getTime() - 2000)));
     autoTable(doc, {
       startY: 40, head: [['TIME', 'AUTH', 'CONTEXT', 'MAGNITUDE']],
-      body: logs.map((l: any) => [new Date(l.timestamp).toLocaleTimeString('en-GB'), !l.memberId ? "SHARED" : "DIRECT", l.context, `${(!l.memberId ? ((-l.value) / (activeProject.members.length || 1)) : -l.value).toLocaleString()} DP`]),
+      body: logs.map((l: any) => {
+        // FIX: Pake participant_count agar akurat di PDF
+        const val = !l.memberId ? ((-l.value) / (l.participant_count || 1)) : -l.value;
+        return [new Date(l.timestamp).toLocaleTimeString('en-GB'), !l.memberId ? "SHARED" : "DIRECT", l.context, `${val.toLocaleString()} DP`];
+      }),
       headStyles: { fillColor: [255, 46, 99] }
     });
     doc.save(`AUDIT_${member.name}.pdf`);
@@ -127,10 +122,8 @@ export default function VaultPage() {
       <div className="absolute inset-0 pointer-events-none scanline opacity-30 z-[100]" />
       
       <Sidebar 
-        projects={projects} 
-        activeProjectId={activeProjectId} 
-        setActiveProject={setActiveProject} 
-        deleteProject={deleteProject} 
+        projects={projects} activeProjectId={activeProjectId} 
+        setActiveProject={setActiveProject} deleteProject={deleteProject} 
         onInitProject={() => setModalType("PROJECT")} 
       />
 
@@ -143,14 +136,12 @@ export default function VaultPage() {
              </div>
           ) : activeProject ? (
             <motion.div key={activeProject.id} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="flex-1 flex flex-col gap-6 overflow-hidden">
-              <Header projectName={activeProject.name} onExportPDF={exportFullPDF} />
+              <Header projectName={activeProject.name} onExportPDF={exportFullPDF} downloadStatus={downloadStatus} />
               <div className="flex-1 grid grid-cols-12 grid-rows-6 gap-6 overflow-hidden min-h-0">
                 <BalanceCard balance={activeProject.balance ?? 0} />
                 <MemberGrid 
-                  members={activeProject.members} 
-                  projectBalance={activeProject.balance} 
-                  onMemberClick={setSelectedMemberId} 
-                  onAddUnit={() => setModalType("OPERATIVE")} 
+                  members={activeProject.members} projectBalance={activeProject.balance} 
+                  onMemberClick={setSelectedMemberId} onAddUnit={() => setModalType("OPERATIVE")} 
                 />
                 <LedgerStream logs={activeProject.logs} onLogClick={setSelectedLogId} />
                 <CommandPanel onInjection={() => setModalType("INJECTION")} onExpense={() => setModalType("EXPENSE")} />
@@ -166,44 +157,28 @@ export default function VaultPage() {
         </AnimatePresence>
       </main>
 
-      {/* Modals Container */}
       <AnimatePresence>
         {selectedMemberId && detailMember && activeProject && (
           <MemberAuditModal 
-            isOpen={!!selectedMemberId} 
-            member={detailMember} 
-            logs={memberLogs} 
-            isProcessing={isProcessing} 
-            onClose={handleCloseModals} 
-            onExportPDF={exportMemberPDF} 
-            onDecommission={(refund) => deleteMember(activeProject.id, selectedMemberId, refund)} 
-            memberCount={activeProject.members?.length ?? 0} // FIX: Tambah fallback ?? 0
+            isOpen={!!selectedMemberId} member={detailMember} logs={memberLogs} 
+            isProcessing={isProcessing} onClose={handleCloseModals} onExportPDF={exportMemberPDF} 
+            onDecommission={(refund) => deleteMember(activeProject.id, selectedMemberId, refund)}
+            memberCount={activeProject.members.length} 
           />
         )}
-        
         {selectedLogId && detailLog && activeProject && (
           <LogAuditModal 
-            isOpen={!!selectedLogId} 
-            log={detailLog} 
-            isProcessing={isProcessing} 
-            onClose={handleCloseModals} 
-            onVoid={() => deleteLog(activeProject.id, selectedLogId)} 
-            activeMembers={activeProject.members ?? []} // FIX: Tambah fallback ?? []
+            isOpen={!!selectedLogId} log={detailLog} isProcessing={isProcessing} 
+            onClose={handleCloseModals} onVoid={() => deleteLog(activeProject.id, selectedLogId)} 
+            activeMembers={activeProject.members}
           />
         )}
-
         {modalType && (
           <ActionModal 
-            isOpen={!!modalType} 
-            type={modalType} 
-            formData={formData} 
-            setFormData={setFormData} 
-            expenseMemberId={expenseMemberId} 
-            setExpenseMemberId={setExpenseMemberId} 
-            activeProject={activeProject} 
-            isProcessing={isProcessing} 
-            onClose={handleCloseModals} 
-            onExecute={handleExecute} 
+            isOpen={!!modalType} type={modalType} formData={formData} setFormData={setFormData} 
+            expenseMemberId={expenseMemberId} setExpenseMemberId={setExpenseMemberId} 
+            activeProject={activeProject} isProcessing={isProcessing} 
+            onClose={handleCloseModals} onExecute={handleExecute} 
           />
         )}
       </AnimatePresence>
