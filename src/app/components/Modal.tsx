@@ -39,7 +39,7 @@ export default function Modal({ isOpen, onClose, title, children }: ModalProps) 
                 {title}
               </h2>
               <button 
-                title="Abort_Sequence" // FIXED: Menghilangkan error axe
+                title="Abort_Sequence"
                 onClick={onClose}
                 className="text-zinc-500 hover:text-[#FF2E63] transition-colors p-1"
               >
