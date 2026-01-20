@@ -1,15 +1,18 @@
-# 🟢 VAULT // BY HARIKAHONO
+---
+
+# VAULT // BY HARIKAHONO
 
 ```
-██    ██  █████  ██    ██ ██      ████████ 
-██    ██ ██   ██ ██    ██ ██         ██    
-██    ██ ███████ ██    ██ ██         ██    
-██    ██ ██   ██ ██    ██ ██         ██    
- ██████  ██   ██  ██████  ███████    ██    
-                                           
- >> TACTICAL_LEDGER_INTERFACE_V1.0
+██      ██  █████   ██      ██ ██      ████████ 
+██      ██ ██   ██  ██      ██ ██         ██    
+██      ██ ███████  ██      ██ ██         ██    
+██      ██ ██   ██  ██      ██ ██         ██    
+ ██████   ██   ██   ██████   ███████     ██    
+                                               
+ >> TACTICAL_LEDGER_INTERFACE_V2.0
  >> ARCHITECT: HARIKAHONO
  >> STATUS: ENCRYPTED // LINK_STABLE
+ >> DATABASE: SQLITE_ACTIVE
 
 ```
 
@@ -17,76 +20,76 @@
 
 ---
 
-## ⚡ CORE PROTOCOLS
+## CORE_PROTOCOLS
 
 * **Multi-Vault Infrastructure**: Inisialisasi dan kelola beberapa proyek aman sekaligus dalam satu terminal dashboard.
 * **Core Integrity Tracking**: Monitoring saldo utama secara real-time dengan indikator stabilitas pulse.
 * **Operative-Linked Ledger**: Hubungkan pengeluaran ke anggota unit spesifik atau jalankan protokol **SHARED_SPLIT** untuk pembagian rata biaya tim secara otomatis.
-* **Unit Decommissioning**: Terminasi link anggota dengan opsi protokol **REFUND** (duit balik ke kas) atau **RETAIN** (anggap hangus sebagai biaya operasional).
-* **Advanced Audit Modules**: Klik entri log manapun atau kartu anggota untuk membedah data audit transaksi secara mendalam (Transaction Hash & Auth Protocol).
-* **Data Extraction**: Ekspor laporan PDF terenkripsi untuk seluruh Ledger proyek atau laporan audit khusus per individu unit.
-* **Tactical UI**: Interface imersif dengan *scanline overlays*, efek *digital glitch*, dan skema warna *Matrix-Green*.
+* **Historical Accuracy**: Menggunakan sistem `participant_count` untuk memastikan perhitungan saldo tetap akurat meskipun jumlah anggota tim berubah di masa depan.
+* **Unit Decommissioning**: Terminasi link anggota dengan opsi protokol **REFUND** (pengembalian dana ke kas) atau **RETAIN** (biaya hangus).
+* **Advanced Audit Modules**: Modul audit mendalam untuk membedah histori transaksi per anggota (Transaction Hash & Auth Protocol).
+* **Data Extraction**: Ekspor laporan PDF terenkripsi dengan **Verified Balance Summary** untuk seluruh ledger proyek atau laporan audit khusus per individu unit.
 
 ---
 
-## 🛠 TECH STACK
+## TECH_STACK
 
 | Component | Technology |
 | --- | --- |
-| **Framework** | [Tauri](https://tauri.app/) (Desktop-Native Desktop App) |
+| **Framework** | [Tauri](https://tauri.app/) (Desktop-Native) |
 | **Frontend** | React + TypeScript + Vite |
-| **State Management** | Zustand (Persistent Storage Protocol) |
-| **Animations** | Framer Motion (Glitch & Skew FX) |
+| **Database** | SQLite via Tauri-Plugin-SQL (Migration-Ready) |
+| **State Management** | Zustand (Internal Store Protocol) |
+| **Animations** | Framer Motion (CRT & Glitch FX) |
 | **Styling** | Tailwind CSS (Custom Arasaka Theme) |
 | **Reporting** | jsPDF + AutoTable |
 
 ---
 
-## 🚀 INITIALIZATION
+## INITIALIZATION
 
 Pastikan terminal lu sudah terpasang `pnpm`.
 
 1. **Clone Terminal**:
+
 ```bash
-git clone [https://github.com/harikahono/project-vault.git](https://github.com/harikahono/project-vault.git)
+git clone https://github.com/harikahono/project-vault.git
 cd project-vault
 
 ```
 
-
 2. **Install Dependencies**:
+
 ```bash
 pnpm install
 
 ```
 
-
 3. **Launch HUD (Development)**:
+
 ```bash
 pnpm tauri dev
 
 ```
 
-
 4. **Compile Production**:
+
 ```bash
 pnpm tauri build
 
 ```
 
-
-
 ---
 
-## 📜 SYSTEM LOG NOTES
+## SYSTEM_LOG_NOTES
 
-* **Storage Logic**: Saat ini data masih tersimpan melalui `localStorage` (Zustand Persist).
-* **Privacy**: Semua data bersifat lokal; tidak ada transmisi eksternal yang terdeteksi.
-* **Update Roadmap**: Integrasi SQLite untuk integritas data relasional dan performa kelas perusahaan.
+* **Storage Logic**: Data dikelola secara relasional melalui SQLite (`vaulthk.db`) dengan dukungan skema migrasi otomatis v1 & v2.
+* **Privacy**: Semua data bersifat lokal; tidak ada transmisi eksternal yang terdeteksi di luar enkripsi PDF.
+* **Performance**: Mendukung **Write-Ahead Logging (WAL)** untuk operasi I/O database yang cepat dan anti-locking.
 
 ---
 
 **Developed by [harikahono**](https://www.google.com/search?q=https://github.com/harikahono)
-*“Secure the funds. Track the burn. Rule the sprawl.”*
+*"Secure the funds. Track the burn. Rule the sprawl."*
 
-```
+---
