@@ -10,7 +10,7 @@ export const initDatabase = async (): Promise<Database> => {
   const db = await Database.load(DB_NAME);
 
   // ───────────────────────────────────────────────
-  //  Migration-friendly pattern + versi tabel
+  // Migration-friendly pattern + versi tabel
   // ───────────────────────────────────────────────
   await db.execute(`
     CREATE TABLE IF NOT EXISTS schema_version (
@@ -26,6 +26,7 @@ export const initDatabase = async (): Promise<Database> => {
 
   // ── Migration step-by-step ───────────────────────
   if (currentVersion < 1) {
+    // Tabel projects
     await db.execute(`
       CREATE TABLE IF NOT EXISTS projects (
         id          TEXT PRIMARY KEY,
@@ -36,6 +37,7 @@ export const initDatabase = async (): Promise<Database> => {
       );
     `);
 
+    // Tabel members
     await db.execute(`
       CREATE TABLE IF NOT EXISTS members (
         id          TEXT PRIMARY KEY,
@@ -49,22 +51,24 @@ export const initDatabase = async (): Promise<Database> => {
       );
     `);
 
+    // Tabel logs + kolom baru participant_count
     await db.execute(`
       CREATE TABLE IF NOT EXISTS logs (
-        id          TEXT PRIMARY KEY,
-        project_id  TEXT NOT NULL,
-        member_id   TEXT,                           -- NULL = shared expense/injection
-        timestamp   TEXT NOT NULL DEFAULT (datetime('now')),
-        type        TEXT NOT NULL CHECK(type IN ('INJECTION', 'EXPENSE', 'VOID', 'DECOMMISSION')),
-        context     TEXT NOT NULL,
-        value       REAL NOT NULL,                  -- positif = injection, negatif = expense
-        created_by  TEXT,                           -- optional: bisa simpan user/id jika multi-user nanti
+        id                TEXT PRIMARY KEY,
+        project_id        TEXT NOT NULL,
+        member_id         TEXT,                           -- NULL = shared expense/injection
+        timestamp         TEXT NOT NULL DEFAULT (datetime('now')),
+        type              TEXT NOT NULL CHECK(type IN ('INJECTION', 'EXPENSE', 'VOID', 'DECOMMISSION')),
+        context           TEXT NOT NULL,
+        value             REAL NOT NULL,                  -- positif = injection, negatif = expense
+        participant_count INTEGER DEFAULT 1,              -- Jumlah member saat transaksi shared (untuk reverse void akurat)
+        created_by        TEXT,                           -- optional: user ID jika multi-user nanti
         FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
         FOREIGN KEY (member_id)   REFERENCES members(id)   ON DELETE SET NULL
       );
     `);
 
-    // Trigger untuk auto update updated_at
+    // Trigger auto update updated_at pada projects
     await db.execute(`
       CREATE TRIGGER IF NOT EXISTS projects_update_timestamp
       AFTER UPDATE ON projects
@@ -78,8 +82,30 @@ export const initDatabase = async (): Promise<Database> => {
     currentVersion = 1;
   }
 
-  // ── Migration v2, v3, dst bisa ditambah di sini nanti ──
-  // if (currentVersion < 2) { ... }
+  // ── Migration v2: Tambah participant_count jika belum ada (untuk DB lama) ──
+  if (currentVersion < 2) {
+    try {
+      // Cek apakah kolom sudah ada
+      const columns = await db.select<{ name: string }[]>(
+        "PRAGMA table_info(logs)"
+      );
+      const hasParticipantCount = columns.some(col => col.name === 'participant_count');
+
+      if (!hasParticipantCount) {
+        console.log("Menambahkan kolom participant_count ke tabel logs...");
+        await db.execute("ALTER TABLE logs ADD COLUMN participant_count INTEGER DEFAULT 1");
+      }
+
+      await db.execute("INSERT OR REPLACE INTO schema_version (version) VALUES (2)");
+      currentVersion = 2;
+      console.log("Migration v2 selesai: participant_count ditambahkan");
+    } catch (err) {
+      console.error("Gagal migrasi v2:", err);
+    }
+  }
+
+  // ── Migration v3, dst bisa ditambah di sini nanti ──
+  // if (currentVersion < 3) { ... }
 
   dbInstance = db;
   console.log(`✓ Vault Database ready (schema v${currentVersion})`);
@@ -101,7 +127,7 @@ export const getDb = async (): Promise<Database> => {
   return initPromise;
 };
 
-// Optional: helper untuk reset DB saat development/debug
+// Optional: helper reset DB untuk development/debug
 export const resetDatabase = async () => {
   const db = await getDb();
   await db.execute("DROP TABLE IF EXISTS logs");

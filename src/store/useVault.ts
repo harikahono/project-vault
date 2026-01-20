@@ -16,6 +16,7 @@ interface Log {
   context: string;
   value: number;
   memberId?: string;
+  participant_count: number; // Kolom baru untuk hitung akurat saat void shared expense
 }
 
 interface Project {
@@ -38,7 +39,7 @@ interface VaultState {
   addMember: (projectId: string, name: string, role: string) => Promise<void>;
   deleteMember: (projectId: string, memberId: string, refund: boolean) => Promise<void>;
   addExpense: (projectId: string, amount: number, context: string, memberId?: string) => Promise<void>;
-  deleteLog: (projectId: string, logId: string) => Promise<void>; // Protokol Void
+  deleteLog: (projectId: string, logId: string) => Promise<void>;
 }
 
 export const useVault = create<VaultState>((set, get) => ({
@@ -52,7 +53,6 @@ export const useVault = create<VaultState>((set, get) => ({
       set({ isLoading: true });
       const db = await getDb();
 
-      // Parallel fetch untuk kecepatan
       const [rawP, rawM, rawL] = await Promise.all([
         db.select("SELECT * FROM projects"),
         db.select("SELECT * FROM members"),
@@ -81,6 +81,7 @@ export const useVault = create<VaultState>((set, get) => ({
             context: l.context,
             value: l.value,
             memberId: l.member_id,
+            participant_count: l.participant_count || 1, // fallback kalau DB lama
           })),
       }));
 
@@ -122,7 +123,6 @@ export const useVault = create<VaultState>((set, get) => ({
     await get().fetchProjects();
   },
 
-  // Versi paling aman & lengkap (dari base)
   addExpense: async (projectId, amount, context, memberId) => {
     if (get().isProcessing) return;
     set({ isProcessing: true });
@@ -145,20 +145,18 @@ export const useVault = create<VaultState>((set, get) => ({
       // 2. Update member spent (jika expense)
       if (isExp) {
         if (memberId) {
-          // Direct expense
           await db.execute("UPDATE members SET total_spent = total_spent + $1 WHERE id = $2", [amount, memberId]);
         } else if (memberCount > 0) {
-          // Shared expense
           const split = amount / memberCount;
           await db.execute("UPDATE members SET total_spent = total_spent + $1 WHERE project_id = $2", [split, projectId]);
         }
       }
 
-      // 3. Catat log
+      // 3. Catat log + participant_count (penting untuk void akurat)
       const logCtx = !memberId && isExp ? `${context} (SHARED_SPLIT)` : context;
       await db.execute(
-        "INSERT INTO logs (id, project_id, member_id, timestamp, type, context, value) VALUES ($1, $2, $3, $4, $5, $6, $7)",
-        [logId, projectId, memberId || null, now, isExp ? 'EXPENSE' : 'INJECTION', logCtx, -amount]
+        "INSERT INTO logs (id, project_id, member_id, timestamp, type, context, value, participant_count) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+        [logId, projectId, memberId || null, now, isExp ? 'EXPENSE' : 'INJECTION', logCtx, -amount, memberCount || 1]
       );
 
       await db.execute("COMMIT");
@@ -173,7 +171,6 @@ export const useVault = create<VaultState>((set, get) => ({
     }
   },
 
-  // Protokol Void dari versi baru
   deleteLog: async (projectId, logId) => {
     if (get().isProcessing) return;
     set({ isProcessing: true });
@@ -187,22 +184,21 @@ export const useVault = create<VaultState>((set, get) => ({
 
       await db.execute("BEGIN TRANSACTION");
 
-      // 1. Reverse saldo project (karena value di log negatif, kita tambah balik)
-      //    → balance + (-value) = balance - value (karena value sudah negatif)
+      // 1. Reverse saldo project
       await db.execute("UPDATE projects SET balance = balance - $1 WHERE id = $2", [log.value, projectId]);
 
       // 2. Reverse member spent (hanya jika EXPENSE)
       if (log.type === 'EXPENSE') {
         if (log.member_id) {
-          // Direct → kurangi total_spent member (karena sebelumnya ditambah)
+          // Direct expense
           await db.execute("UPDATE members SET total_spent = total_spent + $1 WHERE id = $2", [log.value, log.member_id]);
         } else {
-          // Shared → kurangi semua member
-          const members: any[] = await db.select("SELECT id FROM members WHERE project_id = $1", [projectId]);
-          if (members.length > 0) {
-            const splitDiff = log.value / members.length; // value negatif → splitDiff negatif
-            await db.execute("UPDATE members SET total_spent = total_spent + $1 WHERE project_id = $2", [splitDiff, projectId]);
-          }
+          // Shared expense: gunakan participant_count dari log + filter waktu join
+          const splitDiff = log.value / (log.participant_count || 1);
+          await db.execute(
+            "UPDATE members SET total_spent = total_spent + $1 WHERE project_id = $2 AND created_at <= $3",
+            [splitDiff, projectId, log.timestamp]
+          );
         }
       }
 
@@ -210,6 +206,7 @@ export const useVault = create<VaultState>((set, get) => ({
       await db.execute("DELETE FROM logs WHERE id = $1", [logId]);
 
       await db.execute("COMMIT");
+      console.log("✓ Void_Success");
     } catch (e) {
       const db = await getDb();
       await db.execute("ROLLBACK").catch(() => {});
@@ -235,12 +232,15 @@ export const useVault = create<VaultState>((set, get) => ({
 
       await db.execute("BEGIN TRANSACTION");
 
-      await db.execute("UPDATE projects SET balance = balance + $1 WHERE id = $2", [refundAmt, projectId]);
+      if (refund) {
+        await db.execute("UPDATE projects SET balance = balance + $1 WHERE id = $2", [refundAmt, projectId]);
+      }
+
       await db.execute("DELETE FROM members WHERE id = $1", [memberId]);
 
       await db.execute(
-        "INSERT INTO logs (id, project_id, timestamp, type, context, value) VALUES ($1, $2, $3, $4, $5, $6)",
-        [crypto.randomUUID(), projectId, now, 'INJECTION', `UNIT_DECOMMISSIONED: ${m.name}`, refundAmt]
+        "INSERT INTO logs (id, project_id, timestamp, type, context, value, participant_count) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+        [crypto.randomUUID(), projectId, now, 'INJECTION', `UNIT_DECOMMISSIONED: ${m.name}`, refundAmt, 1]
       );
 
       await db.execute("COMMIT");
