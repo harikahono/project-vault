@@ -25,17 +25,15 @@ export default function VaultPage() {
   
   const activeProject = projects?.find(p => p.id === activeProjectId);
 
-  // UI STATE
   const [modalType, setModalType] = useState<"PROJECT" | "OPERATIVE" | "EXPENSE" | "INJECTION" | null>(null);
   const [selectedMemberId, setSelectedMemberId] = useState<string | null>(null);
   const [selectedLogId, setSelectedLogId] = useState<string | null>(null);
-  const [downloadStatus, setDownloadStatus] = useState<string | null>(null); // State untuk Toast
+  const [downloadStatus, setDownloadStatus] = useState<string | null>(null); 
   const [formData, setFormData] = useState({ name: "", role: "", amount: "" });
   const [expenseMemberId, setExpenseMemberId] = useState("");
 
   useEffect(() => { fetchProjects(); }, [fetchProjects]);
 
-  // Logic untuk auto-hide toast setelah 3 detik
   useEffect(() => {
     if (downloadStatus) {
       const timer = setTimeout(() => setDownloadStatus(null), 3000);
@@ -43,7 +41,6 @@ export default function VaultPage() {
     }
   }, [downloadStatus]);
 
-  // DERIVED DATA
   const detailMember = useMemo(() => activeProject?.members?.find((m: any) => m.id === selectedMemberId), [activeProject, selectedMemberId]);
   const detailLog = useMemo(() => activeProject?.logs?.find((l: any) => l.id === selectedLogId), [activeProject, selectedLogId]);
   
@@ -60,7 +57,6 @@ export default function VaultPage() {
     });
   }, [activeProject, detailMember, selectedMemberId]);
 
-  // HANDLERS
   const handleCloseModals = () => {
     if (isProcessing) return;
     setModalType(null); setSelectedMemberId(null); setSelectedLogId(null);
@@ -81,7 +77,6 @@ export default function VaultPage() {
     } catch (err) { console.error(err); }
   };
 
-  // PDF HANDLERS WITH TOAST TRIGGER
   const exportFullPDF = () => {
     if (!activeProject) return;
     generateFullVaultPDF(activeProject);
@@ -112,7 +107,29 @@ export default function VaultPage() {
                <Loader2 size={48} className="text-matrix-green animate-spin mb-4 opacity-20" />
              </div>
           ) : activeProject ? (
-            <motion.div key={activeProject.id} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="flex-1 flex flex-col gap-6 overflow-hidden">
+            <motion.div 
+              key={activeProject.id} 
+              initial={{ 
+                opacity: 0, 
+                x: [10, -10, 5, -5, 0], 
+                scale: 1.02,
+                filter: "brightness(2) contrast(1.5) blur(4px)" 
+              }} 
+              animate={{ 
+                opacity: 1, 
+                x: 0, 
+                scale: 1,
+                filter: "brightness(1) contrast(1) blur(0px)" 
+              }} 
+              exit={{ 
+                opacity: 0, 
+                x: [-5, 5, -10, 10, 0],
+                filter: "hue-rotate(90deg) brightness(4) blur(2px)",
+                scale: 0.98
+              }}
+              transition={{ duration: 0.25, ease: "easeInOut" }}
+              className="flex-1 flex flex-col gap-6 overflow-hidden"
+            >
               <Header projectName={activeProject.name} onExportPDF={exportFullPDF} />
               <div className="flex-1 grid grid-cols-12 grid-rows-6 gap-6 overflow-hidden min-h-0">
                 <BalanceCard balance={activeProject.balance ?? 0} />
@@ -134,7 +151,7 @@ export default function VaultPage() {
         </AnimatePresence>
       </main>
 
-      {/* MODALS CONTAINER */}
+      {/* MODALS & TOAST */}
       <AnimatePresence>
         {selectedMemberId && detailMember && activeProject && (
           <MemberAuditModal 
@@ -161,13 +178,12 @@ export default function VaultPage() {
         )}
       </AnimatePresence>
 
-      {/* GLOBAL TRANSMISSION TOAST - MATRIX THEMED */}
       <AnimatePresence>
         {downloadStatus && (
           <motion.div 
             initial={{ opacity: 0, y: 50, x: "-50%", scale: 0.9 }} 
             animate={{ opacity: 1, y: 0, x: "-50%", scale: 1 }} 
-            exit={{ opacity: 0, scale: 0.9, y: 20, transition: { duration: 0.2 } }} 
+            exit={{ opacity: 0, scale: 0.9, y: 20 }} 
             className="fixed bottom-10 left-1/2 z-[1000] flex items-center gap-4 bg-matrix-card border border-matrix-green p-5 shadow-glow-green min-w-[300px]"
           >
             <div className="p-2 bg-matrix-green/10 border border-matrix-green">
